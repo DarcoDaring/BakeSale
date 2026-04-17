@@ -52,8 +52,10 @@ export const getProducts         = ()      => api.get('/products/');
 export const getStockStatus      = ()      => api.get('/products/stock_status/');
 
 // Purchases
-export const createPurchaseBill = d  => api.post('/purchases/', d);
-export const getPurchases       = () => api.get('/purchases/');
+export const createPurchaseBill = d      => api.post('/purchases/', d);
+export const getPurchases       = ()     => api.get('/purchases/');
+export const getPurchaseBill    = id     => api.get(`/purchases/${id}/`);
+export const getPurchaseReport  = params => api.get('/purchases/report/', { params });
 
 // Bills
 export const createBill        = d       => api.post('/bills/', d);
@@ -71,6 +73,7 @@ export const getReturns   = () => api.get('/returns/');
 // Purchase Returns
 export const createPurchaseReturn    = d      => api.post('/purchase-returns/', d);
 export const getPurchaseReturnReport = params => api.get('/purchase-returns/report/', { params });
+export const markPurchaseReturned    = id     => api.patch(`/purchase-returns/${id}/mark_returned/`, {});
 
 // Internal Sale Masters
 export const getInternalMasters   = ()      => api.get('/internal-masters/');
@@ -89,6 +92,12 @@ export const updateDirectMaster = (id, d) => api.patch(`/direct-masters/${id}/`,
 
 // Direct Sales
 export const createDirectSale = d => api.post('/direct-sales/', d);
+
+// Stock Adjustments
+export const createStockAdjustment  = d  => api.post('/stock-adjustments/', d);
+export const getStockAdjustments    = () => api.get('/stock-adjustments/');
+export const approveStockAdjustment = id => api.patch(`/stock-adjustments/${id}/approve/`, {});
+export const rejectStockAdjustment  = id => api.patch(`/stock-adjustments/${id}/reject/`, {});
 
 // Users
 export const getUsers   = ()      => api.get('/users/');

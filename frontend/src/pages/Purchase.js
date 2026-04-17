@@ -3,7 +3,7 @@ import toast from 'react-hot-toast';
 import {
   createProduct, updateProduct, getProducts,
   getProductByBarcode, searchProducts,
-  createPurchaseBill, getVendors, createVendor, updateVendor,
+  createPurchaseBill, getPurchases, getVendors, createVendor, updateVendor,
   createPurchaseReturn
 } from '../services/api';
 
@@ -245,11 +245,9 @@ function ProductMasterModal({ onClose }) {
 
 function ProductFormModal({ product, onClose, onSaved }) {
   const [form, setForm] = useState({
-    name:          product?.name          || '',
-    barcode:       product?.barcode       || '',
-    selling_price: product?.selling_price ? String(product.selling_price) : '',
-    selling_unit:  product?.selling_unit  || 'nos',
-    auto_barcode:  false,
+    name:         product?.name    || '',
+    barcode:      product?.barcode || '',
+    auto_barcode: false,
   });
   const [loading, setLoading] = useState(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -260,16 +258,14 @@ function ProductFormModal({ product, onClose, onSaved }) {
     if (!form.name) { toast.error('Product name required'); return; }
     setLoading(true);
     try {
-      const payload = {
-        name:          form.name,
-        selling_unit:  form.selling_unit,
-        selling_price: parseFloat(form.selling_price) || 0,
-      };
+      const payload = { name: form.name };
       if (!isEdit) {
         if (!form.auto_barcode && form.barcode) payload.barcode = form.barcode;
-        await createProduct(payload); toast.success('Product created');
+        await createProduct(payload);
+        toast.success('Product created');
       } else {
-        await updateProduct(product.id, payload); toast.success('Product updated');
+        await updateProduct(product.id, { name: form.name });
+        toast.success('Product updated');
       }
       onSaved(); onClose();
     } catch (err) {
@@ -284,20 +280,34 @@ function ProductFormModal({ product, onClose, onSaved }) {
         <form onSubmit={handleSubmit}>
           <div className="form-group">
             <label>Product Name *</label>
-            <input autoFocus value={form.name} onChange={e => set('name', e.target.value)} placeholder="e.g. Chocolate Cake" />
+            <input
+              autoFocus
+              value={form.name}
+              onChange={e => set('name', e.target.value)}
+              placeholder="e.g. Chocolate Cake"
+              onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
+            />
           </div>
           {!isEdit && (
             <>
               <div className="form-group">
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, textTransform: 'none', letterSpacing: 0 }}>
-                  <input type="checkbox" checked={form.auto_barcode} onChange={e => set('auto_barcode', e.target.checked)} style={{ width: 'auto' }} />
+                  <input type="checkbox" checked={form.auto_barcode}
+                    onChange={e => set('auto_barcode', e.target.checked)}
+                    style={{ width: 'auto' }} />
                   Auto-generate Barcode
                 </label>
               </div>
               {!form.auto_barcode && (
                 <div className="form-group">
-                  <label>Barcode (leave blank to auto-generate)</label>
-                  <input value={form.barcode} onChange={e => set('barcode', e.target.value)} placeholder="Scan or enter barcode" style={{ fontFamily: 'var(--mono)' }} />
+                  <label>Barcode (scan or enter manually)</label>
+                  <input
+                    value={form.barcode}
+                    onChange={e => set('barcode', e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
+                    placeholder="Scan barcode here…"
+                    style={{ fontFamily: 'var(--mono)' }}
+                  />
                 </div>
               )}
             </>
@@ -305,23 +315,13 @@ function ProductFormModal({ product, onClose, onSaved }) {
           {isEdit && (
             <div className="form-group">
               <label>Barcode</label>
-              <input value={form.barcode} readOnly style={{ fontFamily: 'var(--mono)', opacity: 0.6, cursor: 'not-allowed' }} />
+              <input value={form.barcode} readOnly
+                style={{ fontFamily: 'var(--mono)', opacity: 0.6, cursor: 'not-allowed' }} />
             </div>
           )}
-          <div className="form-row">
-            <div className="form-group" style={{ margin: 0 }}>
-              <label>Selling Price (₹)</label>
-              <input type="number" step="0.01" value={form.selling_price} onChange={e => set('selling_price', e.target.value)} placeholder="0.00" />
-            </div>
-            <div className="form-group" style={{ margin: 0 }}>
-              <label>Selling Unit</label>
-              <select value={form.selling_unit} onChange={e => set('selling_unit', e.target.value)}>
-                {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-              </select>
-            </div>
-          </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-            <button type="submit" className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }} disabled={loading}>
+            <button type="submit" className="btn btn-primary"
+              style={{ flex: 1, justifyContent: 'center' }} disabled={loading}>
               {loading ? 'Saving…' : isEdit ? '✓ Update' : '✓ Create'}
             </button>
             <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
@@ -617,7 +617,23 @@ export default function Purchase() {
   const [showProduct,    setShowProduct]    = useState(false);
   const [showVendor,     setShowVendor]     = useState(false);
   const [showPurReturn,  setShowPurReturn]  = useState(false);
+  const [purchaseNumber, setPurchaseNumber] = useState('PO000001');
 
+  // Fetch next purchase number on mount
+  useEffect(() => {
+    getPurchases().then(r => {
+      const bills = r.data;
+      if (bills.length > 0 && bills[0].purchase_number) {
+        const last = bills[0].purchase_number;
+        try {
+          const num = parseInt(last.replace('PO', '')) + 1;
+          setPurchaseNumber(`PO${String(num).padStart(6, '0')}`);
+        } catch { setPurchaseNumber('PO000001'); }
+      } else {
+        setPurchaseNumber('PO000001');
+      }
+    }).catch(() => setPurchaseNumber('PO000001'));
+  }, []);
   const fetchVendors = () => getVendors().then(r => setVendors(r.data));
   useEffect(() => { fetchVendors(); }, []);
 
@@ -650,7 +666,8 @@ export default function Purchase() {
     setLoading(true);
     try {
       const payload = {
-        vendor: selectedVendor,
+        vendor:  selectedVendor,
+        is_paid: isPaid,
         items: rows.map(r => ({
           product:        r.product.id,
           purchase_unit:  r.purchase_unit,
@@ -664,10 +681,21 @@ export default function Purchase() {
       };
       await createPurchaseBill(payload);
       const paidStatus = isPaid ? 'Paid ✅' : 'Not Paid ⏳';
-      toast.success(`Purchase recorded! ${rows.length} item${rows.length > 1 ? 's' : ''} added to stock. Payment: ${paidStatus}`);
+      toast.success(`Purchase ${purchaseNumber} recorded! Payment: ${paidStatus}`);
       setRows([emptyRow()]);
       setSelectedVendor('');
       setIsPaid(true);
+      // Refresh purchase number for next bill
+      getPurchases().then(r => {
+        const bills = r.data;
+        if (bills.length > 0 && bills[0].purchase_number) {
+          const last = bills[0].purchase_number;
+          try {
+            const num = parseInt(last.replace('PO', '')) + 1;
+            setPurchaseNumber(`PO${String(num).padStart(6, '0')}`);
+          } catch { setPurchaseNumber('PO000002'); }
+        }
+      }).catch(() => {});
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to record purchase');
     } finally { setLoading(false); }
@@ -698,9 +726,25 @@ export default function Purchase() {
         </div>
       </div>
 
-      {/* Vendor + Payment Status row */}
+     {/* Purchase Number + Vendor + Payment Status */}
       <div className="card" style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', gap: 24, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+
+          {/* Purchase Number — auto generated, display only */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text3)' }}>
+              Purchase No.
+            </div>
+            <div style={{
+              padding: '8px 16px', borderRadius: 'var(--radius)',
+              background: 'var(--bg2)', border: '1px solid var(--border)',
+              fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 16,
+              color: 'var(--accent)', letterSpacing: '0.04em',
+            }}>
+              {purchaseNumber}
+            </div>
+          </div>
+
           {/* Vendor selector */}
           <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 200 }}>
             <label>
@@ -722,7 +766,7 @@ export default function Purchase() {
             </select>
           </div>
 
-          {/* Payment status — mandatory checkbox */}
+          {/* Payment status */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingBottom: 2 }}>
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text3)' }}>
               Payment Status *
@@ -734,34 +778,22 @@ export default function Purchase() {
                 border: `1px solid ${isPaid ? 'var(--green)' : 'var(--border)'}`,
                 background: isPaid ? 'var(--green-dim)' : 'var(--bg3)',
                 color: isPaid ? 'var(--green)' : 'var(--text2)',
-                fontWeight: isPaid ? 700 : 400,
-                transition: 'all 0.15s',
+                fontWeight: isPaid ? 700 : 400, transition: 'all 0.15s',
               }}>
-                <input
-                  type="radio"
-                  name="payment_status"
-                  checked={isPaid}
-                  onChange={() => setIsPaid(true)}
-                  style={{ width: 'auto', accentColor: 'var(--green)' }}
-                />
+                <input type="radio" name="payment_status" checked={isPaid}
+                  onChange={() => setIsPaid(true)} style={{ width: 'auto', accentColor: 'var(--green)' }} />
                 ✅ Paid
               </label>
               <label style={{
                 display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
                 padding: '8px 16px', borderRadius: 'var(--radius)',
                 border: `1px solid ${!isPaid ? 'var(--yellow)' : 'var(--border)'}`,
-                background: !isPaid ? 'var(--yellow-dim, rgba(234,179,8,0.12))' : 'var(--bg3)',
+                background: !isPaid ? 'rgba(234,179,8,0.12)' : 'var(--bg3)',
                 color: !isPaid ? 'var(--yellow)' : 'var(--text2)',
-                fontWeight: !isPaid ? 700 : 400,
-                transition: 'all 0.15s',
+                fontWeight: !isPaid ? 700 : 400, transition: 'all 0.15s',
               }}>
-                <input
-                  type="radio"
-                  name="payment_status"
-                  checked={!isPaid}
-                  onChange={() => setIsPaid(false)}
-                  style={{ width: 'auto', accentColor: 'var(--yellow)' }}
-                />
+                <input type="radio" name="payment_status" checked={!isPaid}
+                  onChange={() => setIsPaid(false)} style={{ width: 'auto', accentColor: 'var(--yellow)' }} />
                 ⏳ Not Paid
               </label>
             </div>

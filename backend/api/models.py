@@ -64,8 +64,6 @@ class Product(models.Model):
     name             = models.CharField(max_length=200)
     selling_price    = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     selling_unit     = models.CharField(max_length=10, choices=UNIT_CHOICES, default='nos')
-    # Total stock = sum of all active batch quantities
-    # Kept for quick reference / backward compat
     stock_quantity   = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     damaged_quantity = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     expired_quantity = models.DecimalField(max_digits=12, decimal_places=3, default=0)
@@ -82,16 +80,11 @@ class Product(models.Model):
 
 
 class StockBatch(models.Model):
-    """
-    Represents a batch of stock at a specific selling price.
-    Every purchase that introduces a new MRP creates a new batch.
-    If the MRP matches an existing active batch, quantity is added to that batch.
-    """
-    product      = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='batches')
-    mrp          = models.DecimalField(max_digits=10, decimal_places=2)
-    quantity     = models.DecimalField(max_digits=12, decimal_places=3, default=0)
-    created_at   = models.DateTimeField(auto_now_add=True)
-    updated_at   = models.DateTimeField(auto_now=True)
+    product    = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='batches')
+    mrp        = models.DecimalField(max_digits=10, decimal_places=2)
+    quantity   = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['mrp', 'created_at']
@@ -101,12 +94,26 @@ class StockBatch(models.Model):
 
 
 class PurchaseBill(models.Model):
-    vendor     = models.ForeignKey(Vendor, on_delete=models.SET_NULL, null=True, blank=True, related_name='purchases')
-    date       = models.DateTimeField(auto_now_add=True)
-    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    purchase_number = models.CharField(max_length=20, unique=True, blank=True)
+    vendor          = models.ForeignKey(Vendor, on_delete=models.SET_NULL, null=True, blank=True, related_name='purchases')
+    is_paid         = models.BooleanField(default=True)
+    date            = models.DateTimeField(auto_now_add=True)
+    created_by      = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+
+    @classmethod
+    def generate_purchase_number(cls):
+        last = cls.objects.order_by('-id').first()
+        if last and last.purchase_number:
+            try:
+                num = int(last.purchase_number.replace('PO', '')) + 1
+            except ValueError:
+                num = 1
+        else:
+            num = 1
+        return f"PO{num:06d}"
 
     def __str__(self):
-        return f"Purchase #{self.id} — {self.vendor}"
+        return f"Purchase #{self.purchase_number} — {self.vendor}"
 
 
 class Purchase(models.Model):
@@ -217,11 +224,17 @@ class InternalSale(models.Model):
 
 
 class PurchaseReturn(models.Model):
+    """Return status: pending = not yet physically returned, returned = done"""
+    STATUS_CHOICES = [
+        ('pending',  'Pending Return'),
+        ('returned', 'Product Returned'),
+    ]
     product        = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='purchase_returns')
     quantity       = models.DecimalField(max_digits=12, decimal_places=3)
     purchase_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     tax            = models.DecimalField(max_digits=5,  decimal_places=2, default=0)
     reason         = models.TextField(blank=True)
+    status         = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
     date           = models.DateTimeField(auto_now_add=True)
     created_by     = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
 
@@ -263,3 +276,23 @@ class DirectSale(models.Model):
 
     def __str__(self):
         return f"DirectSale: {self.item.name} — ₹{self.price}"
+
+
+class StockAdjustmentRequest(models.Model):
+    STATUS_CHOICES = [
+        ('pending',  'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+    product        = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='stock_adjustments')
+    system_stock   = models.DecimalField(max_digits=12, decimal_places=3)
+    physical_stock = models.DecimalField(max_digits=12, decimal_places=3)
+    status         = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    reason         = models.TextField(blank=True)
+    requested_by   = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='stock_requests')
+    reviewed_by    = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='stock_reviews')
+    created_at     = models.DateTimeField(auto_now_add=True)
+    reviewed_at    = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"StockAdj: {self.product.name} {self.system_stock}→{self.physical_stock} [{self.status}]"

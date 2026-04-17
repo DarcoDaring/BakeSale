@@ -4,19 +4,22 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.db.models import Sum, Q
+from django.utils import timezone
 
 from .models import (
     User, Vendor, Product, StockBatch, PurchaseBill, Purchase,
     SaleBill, SaleItem, ReturnItem,
     InternalSaleMaster, InternalSale, PurchaseReturn,
-    DirectSaleMaster, DirectSale
+    DirectSaleMaster, DirectSale, StockAdjustmentRequest
 )
 from .serializers import (
     CustomTokenObtainPairSerializer, UserSerializer, VendorSerializer,
-    ProductSerializer, PurchaseBillSerializer, PurchaseItemSerializer,
+    ProductSerializer, PurchaseBillSerializer, PurchaseBillListSerializer,
+    PurchaseItemSerializer,
     SaleBillSerializer, SaleBillListSerializer,
     ReturnItemSerializer, InternalSaleMasterSerializer, InternalSaleSerializer,
-    PurchaseReturnSerializer, DirectSaleMasterSerializer, DirectSaleSerializer
+    PurchaseReturnSerializer, DirectSaleMasterSerializer, DirectSaleSerializer,
+    StockAdjustmentRequestSerializer
 )
 from .permissions import IsAdminUser
 
@@ -43,62 +46,31 @@ class VendorViewSet(viewsets.ModelViewSet):
 
 
 def product_to_batch_rows(products):
-    """
-    Convert products to per-batch rows for the sale search dropdown.
-    - Single batch with stock > 0  → one row, no MRP badge needed
-    - Multiple batches with stock > 0 → one row per batch, MRP badge shown
-    - No batches or all empty → one row marked out of stock
-    """
     rows = []
     for p in products:
-        # Only batches with stock remaining
-        batches = list(
-            p.batches.filter(quantity__gt=0).order_by('mrp', 'created_at')
-        )
-
+        batches = list(p.batches.filter(quantity__gt=0).order_by('mrp', 'created_at'))
         if not batches:
-            # No stock in any batch — show as out of stock
             rows.append({
-                'id':             p.id,
-                'barcode':        p.barcode,
-                'name':           p.name,
-                'selling_price':  str(p.selling_price),
-                'selling_unit':   p.selling_unit,
-                'stock_quantity': '0',
-                'is_active':      p.is_active,
-                'batch_id':       None,
-                'batch_mrp':      None,
-                'multi_batch':    False,
+                'id': p.id, 'barcode': p.barcode, 'name': p.name,
+                'selling_price': str(p.selling_price), 'selling_unit': p.selling_unit,
+                'stock_quantity': '0', 'is_active': p.is_active,
+                'batch_id': None, 'batch_mrp': None, 'multi_batch': False,
             })
         elif len(batches) == 1:
-            # Only one price batch — simple row, no MRP badge needed
             b = batches[0]
             rows.append({
-                'id':             p.id,
-                'barcode':        p.barcode,
-                'name':           p.name,
-                'selling_price':  str(b.mrp),
-                'selling_unit':   p.selling_unit,
-                'stock_quantity': str(b.quantity),
-                'is_active':      p.is_active,
-                'batch_id':       b.id,
-                'batch_mrp':      str(b.mrp),
-                'multi_batch':    False,
+                'id': p.id, 'barcode': p.barcode, 'name': p.name,
+                'selling_price': str(b.mrp), 'selling_unit': p.selling_unit,
+                'stock_quantity': str(b.quantity), 'is_active': p.is_active,
+                'batch_id': b.id, 'batch_mrp': str(b.mrp), 'multi_batch': False,
             })
         else:
-            # Multiple price batches — show each separately with MRP badge
             for b in batches:
                 rows.append({
-                    'id':             p.id,
-                    'barcode':        p.barcode,
-                    'name':           p.name,
-                    'selling_price':  str(b.mrp),
-                    'selling_unit':   p.selling_unit,
-                    'stock_quantity': str(b.quantity),
-                    'is_active':      p.is_active,
-                    'batch_id':       b.id,
-                    'batch_mrp':      str(b.mrp),
-                    'multi_batch':    True,
+                    'id': p.id, 'barcode': p.barcode, 'name': p.name,
+                    'selling_price': str(b.mrp), 'selling_unit': p.selling_unit,
+                    'stock_quantity': str(b.quantity), 'is_active': p.is_active,
+                    'batch_id': b.id, 'batch_mrp': str(b.mrp), 'multi_batch': True,
                 })
     return rows
 
@@ -146,11 +118,57 @@ class ProductViewSet(viewsets.ModelViewSet):
 
 class PurchaseBillViewSet(viewsets.ModelViewSet):
     queryset           = PurchaseBill.objects.all().order_by('-date')
-    serializer_class   = PurchaseBillSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return PurchaseBillListSerializer
+        return PurchaseBillSerializer
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def report(self, request):
+        date_from = request.query_params.get('date_from')
+        date_to   = request.query_params.get('date_to')
+
+        bills = PurchaseBill.objects.all().prefetch_related('items', 'vendor')
+        if date_from:
+            bills = bills.filter(date__date__gte=date_from)
+        if date_to:
+            bills = bills.filter(date__date__lte=date_to)
+        bills = bills.order_by('-date')
+
+        result = []
+        grand_total = 0
+        for b in bills:
+            total_purchase_price = 0
+            total_tax_amount     = 0
+            total_value          = 0
+            for item in b.items.all():
+                qty   = float(item.quantity) * float(item.selling_qty)
+                price = float(item.purchase_price)
+                tax   = float(item.tax)
+                base  = qty * price
+                tax_a = base * tax / 100
+                total_purchase_price += base
+                total_tax_amount     += tax_a
+                total_value          += base + tax_a
+            grand_total += total_value
+            result.append({
+                'id':                   b.id,
+                'purchase_number':      b.purchase_number,
+                'vendor_name':          b.vendor.name if b.vendor else '—',
+                'is_paid':              b.is_paid,
+                'date':                 b.date,
+                'total_purchase_price': round(total_purchase_price, 2),
+                'total_tax':            round(total_tax_amount, 2),
+                'total_value':          round(total_value, 2),
+                'item_count':           b.items.count(),
+            })
+
+        return Response({'bills': result, 'grand_total': round(grand_total, 2)})
 
 
 class SaleBillViewSet(viewsets.ModelViewSet):
@@ -194,8 +212,7 @@ class SaleBillViewSet(viewsets.ModelViewSet):
             else:
                 latest = StockBatch.objects.filter(product=product).order_by('-mrp', '-created_at').first()
                 if latest:
-                    latest.quantity = Decimal(str(latest.quantity)) + qty
-                    latest.save()
+                    latest.quantity = Decimal(str(latest.quantity)) + qty; latest.save()
                 else:
                     StockBatch.objects.create(product=product, mrp=product.selling_price, quantity=qty)
             product.stock_quantity = Decimal(str(product.stock_quantity)) + qty
@@ -207,10 +224,18 @@ class SaleBillViewSet(viewsets.ModelViewSet):
     def sale_report(self, request):
         date_from = request.query_params.get('date_from')
         date_to   = request.query_params.get('date_to')
+
+        # Default to today if no dates provided
+        if not date_from and not date_to:
+            today     = timezone.localdate()
+            date_from = str(today)
+            date_to   = str(today)
+
         bills = SaleBill.objects.all()
         if date_from: bills = bills.filter(created_at__date__gte=date_from)
         if date_to:   bills = bills.filter(created_at__date__lte=date_to)
         bills = bills.order_by('-created_at')
+
         grand_total      = bills.aggregate(t=Sum('total_amount'))['t'] or 0
         pure_cash_total  = bills.filter(payment_type='cash').aggregate(t=Sum('total_amount'))['t'] or 0
         split_cash_total = bills.filter(payment_type__in=['cash_card','cash_upi']).aggregate(t=Sum('cash_amount'))['t'] or 0
@@ -221,6 +246,7 @@ class SaleBillViewSet(viewsets.ModelViewSet):
         pure_upi_total   = bills.filter(payment_type='upi').aggregate(t=Sum('total_amount'))['t'] or 0
         split_upi_total  = bills.filter(payment_type='cash_upi').aggregate(t=Sum('upi_amount'))['t'] or 0
         upi_total        = float(pure_upi_total) + float(split_upi_total)
+
         return Response({
             'bills': SaleBillListSerializer(bills, many=True).data,
             'totals': {
@@ -228,7 +254,9 @@ class SaleBillViewSet(viewsets.ModelViewSet):
                 'cash_total':  cash_total,
                 'card_total':  card_total,
                 'upi_total':   upi_total,
-            }
+            },
+            'date_from': date_from,
+            'date_to':   date_to,
         })
 
     @action(detail=False, methods=['get'])
@@ -242,12 +270,10 @@ class SaleBillViewSet(viewsets.ModelViewSet):
             'product__id', 'product__name', 'product__barcode', 'price'
         ).annotate(total_qty=Sum('quantity')).order_by('product__name')
         return Response([{
-            'product_id':      r['product__id'],
-            'product_name':    r['product__name'],
-            'product_barcode': r['product__barcode'],
-            'mrp':             r['price'],
-            'quantity_sold':   r['total_qty'],
-            'total_amount':    float(r['price']) * float(r['total_qty']),
+            'product_id': r['product__id'], 'product_name': r['product__name'],
+            'product_barcode': r['product__barcode'], 'mrp': r['price'],
+            'quantity_sold': r['total_qty'],
+            'total_amount': float(r['price']) * float(r['total_qty']),
         } for r in report])
 
 
@@ -293,14 +319,10 @@ class InternalSaleViewSet(viewsets.ModelViewSet):
             'destination__id', 'destination__name', 'price'
         ).annotate(total_qty=Sum('quantity')).order_by('destination__name', 'product__name')
         return Response([{
-            'product_id':       r['product__id'],
-            'product_name':     r['product__name'],
-            'product_barcode':  r['product__barcode'],
-            'destination_id':   r['destination__id'],
-            'destination_name': r['destination__name'],
-            'mrp':              r['price'],
-            'quantity':         r['total_qty'],
-            'total_amount':     float(r['price']) * float(r['total_qty']),
+            'product_id': r['product__id'], 'product_name': r['product__name'],
+            'product_barcode': r['product__barcode'], 'destination_id': r['destination__id'],
+            'destination_name': r['destination__name'], 'mrp': r['price'],
+            'quantity': r['total_qty'], 'total_amount': float(r['price']) * float(r['total_qty']),
         } for r in report])
 
 
@@ -321,6 +343,14 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
         else:
             serializer.save(created_by=self.request.user)
 
+    @action(detail=True, methods=['patch'])
+    def mark_returned(self, request, pk=None):
+        """Mark a purchase return as physically returned to vendor."""
+        pr = self.get_object()
+        pr.status = 'returned'
+        pr.save()
+        return Response(PurchaseReturnSerializer(pr).data)
+
     @action(detail=False, methods=['get'])
     def report(self, request):
         date_from = request.query_params.get('date_from')
@@ -329,6 +359,7 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
         if date_from: returns = returns.filter(date__date__gte=date_from)
         if date_to:   returns = returns.filter(date__date__lte=date_to)
         returns = returns.order_by('-date')
+
         result = []
         for r in returns:
             price_with_tax = float(r.purchase_price) * (1 + float(r.tax) / 100)
@@ -341,9 +372,15 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
                 'tax':             float(r.tax),
                 'item_cost':       round(price_with_tax * float(r.quantity), 2),
                 'reason':          r.reason,
+                'status':          r.status,
                 'date':            r.date,
             })
-        return Response({'returns': result, 'total_cost': sum(r['item_cost'] for r in result)})
+        pending_count = PurchaseReturn.objects.filter(status='pending').count()
+        return Response({
+            'returns':       result,
+            'total_cost':    sum(r['item_cost'] for r in result),
+            'pending_count': pending_count,
+        })
 
 
 class DirectSaleMasterViewSet(viewsets.ModelViewSet):
@@ -362,3 +399,58 @@ class DirectSaleViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
+
+
+class StockAdjustmentRequestViewSet(viewsets.ModelViewSet):
+    queryset           = StockAdjustmentRequest.objects.all().order_by('-created_at')
+    serializer_class   = StockAdjustmentRequestSerializer
+    permission_classes = [IsAuthenticated]
+
+    def perform_create(self, serializer):
+        serializer.save(requested_by=self.request.user)
+
+    @action(detail=True, methods=['patch'])
+    def approve(self, request, pk=None):
+        from decimal import Decimal
+        from django.utils import timezone
+        adj = self.get_object()
+        if adj.status != 'pending':
+            return Response({'error': 'Already reviewed'}, status=400)
+
+        product = adj.product
+        new_qty = Decimal(str(adj.physical_stock))
+
+        # Adjust product stock
+        product.stock_quantity = new_qty
+        product.save()
+
+        # Adjust batches proportionally — simplest: clear and set single batch at current price
+        old_total = sum(
+            Decimal(str(b.quantity))
+            for b in StockBatch.objects.filter(product=product, quantity__gt=0)
+        )
+        if old_total > 0:
+            ratio = new_qty / old_total
+            for b in StockBatch.objects.filter(product=product):
+                b.quantity = (Decimal(str(b.quantity)) * ratio).quantize(Decimal('0.001'))
+                b.save()
+        elif new_qty > 0:
+            StockBatch.objects.create(product=product, mrp=product.selling_price, quantity=new_qty)
+
+        adj.status      = 'approved'
+        adj.reviewed_by = request.user
+        adj.reviewed_at = timezone.now()
+        adj.save()
+        return Response(StockAdjustmentRequestSerializer(adj).data)
+
+    @action(detail=True, methods=['patch'])
+    def reject(self, request, pk=None):
+        from django.utils import timezone
+        adj = self.get_object()
+        if adj.status != 'pending':
+            return Response({'error': 'Already reviewed'}, status=400)
+        adj.status      = 'rejected'
+        adj.reviewed_by = request.user
+        adj.reviewed_at = timezone.now()
+        adj.save()
+        return Response(StockAdjustmentRequestSerializer(adj).data)
