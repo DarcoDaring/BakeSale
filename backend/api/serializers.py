@@ -4,7 +4,7 @@ from .models import (
     User, Vendor, Product, StockBatch, PurchaseBill, Purchase,
     SaleBill, SaleItem, ReturnItem,
     InternalSaleMaster, InternalSale, PurchaseReturn,
-    DirectSaleMaster, DirectSale, StockAdjustmentRequest
+    DirectSaleMaster, DirectSale, StockAdjustmentRequest, StockTransfer
 )
 from decimal import Decimal
 
@@ -78,13 +78,21 @@ class ProductSerializer(serializers.ModelSerializer):
 class PurchaseItemSerializer(serializers.ModelSerializer):
     product_name    = serializers.CharField(source='product.name',    read_only=True)
     product_barcode = serializers.CharField(source='product.barcode', read_only=True)
+    cost_per_item   = serializers.SerializerMethodField()
 
     class Meta:
         model  = Purchase
         fields = ['id', 'product', 'product_name', 'product_barcode',
                   'purchase_unit', 'quantity', 'purchase_price', 'tax',
-                  'mrp', 'selling_unit', 'selling_qty', 'date']
+                  'mrp', 'selling_unit', 'selling_qty', 'cost_per_item', 'date']
         read_only_fields = ['id', 'date']
+
+    def get_cost_per_item(self, obj):
+        """purchase_price ÷ selling_qty = cost per selling unit"""
+        selling_qty = float(obj.selling_qty) if obj.selling_qty else 1
+        if selling_qty <= 0:
+            selling_qty = 1
+        return round(float(obj.purchase_price) / selling_qty, 4)
 
 
 class PurchaseBillListSerializer(serializers.ModelSerializer):
@@ -99,9 +107,10 @@ class PurchaseBillListSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'purchase_number', 'date']
 
     def get_total_value(self, obj):
+        # total = quantity × purchase_price × (1 + tax/100)
         total = 0
         for item in obj.items.all():
-            qty   = float(item.quantity) * float(item.selling_qty)
+            qty   = float(item.quantity)
             price = float(item.purchase_price)
             tax   = float(item.tax)
             total += qty * price * (1 + tax / 100)
@@ -130,16 +139,24 @@ class PurchaseBillSerializer(serializers.ModelSerializer):
         )
 
         for item_data in items_data:
-            product      = item_data['product']
-            quantity     = item_data['quantity']
-            selling_qty  = item_data.get('selling_qty', 1)
-            mrp          = item_data['mrp']
-            selling_unit = item_data['selling_unit']
+            product       = item_data['product']
+            quantity      = item_data['quantity']
+            selling_qty   = item_data.get('selling_qty', 1)
+            mrp           = item_data['mrp']
+            selling_unit  = item_data['selling_unit']
+            purchase_unit = item_data.get('purchase_unit', 'nos')
 
             Purchase.objects.create(bill=bill, **item_data)
 
-            stock_to_add = Decimal(str(float(quantity) * float(selling_qty)))
-            mrp_decimal  = Decimal(str(mrp)).quantize(Decimal('0.01'))
+            # Stock added:
+            # - For 'case': qty × selling_qty (e.g. 2 cases × 12 nos = 24 nos)
+            # - For 'nos'/'kg': stock = qty only (selling_qty is 1, no multiplication needed)
+            if purchase_unit == 'case':
+                stock_to_add = Decimal(str(float(quantity) * float(selling_qty)))
+            else:
+                stock_to_add = Decimal(str(float(quantity)))
+
+            mrp_decimal = Decimal(str(mrp)).quantize(Decimal('0.01'))
 
             existing_batch = None
             for b in StockBatch.objects.filter(product=product):
@@ -166,11 +183,32 @@ class SaleItemSerializer(serializers.ModelSerializer):
     product_barcode = serializers.CharField(source='product.barcode', read_only=True)
     subtotal        = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     batch_id        = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    tax             = serializers.SerializerMethodField()
+    cost_per_item   = serializers.SerializerMethodField()
 
     class Meta:
         model  = SaleItem
         fields = ['id', 'product', 'product_name', 'product_barcode',
-                  'batch_id', 'quantity', 'price', 'subtotal']
+                  'batch_id', 'quantity', 'price', 'subtotal',
+                  'tax', 'cost_per_item']
+
+    def get_tax(self, obj):
+        """Tax % from the last purchase record for this product."""
+        last = obj.product.purchases.order_by('-date').first()
+        return float(last.tax) if last else 0
+
+    def get_cost_per_item(self, obj):
+        """
+        Cost per selling unit = purchase_price ÷ selling_qty
+        This is the correct tax base for CGST/SGST calculation.
+        """
+        last = obj.product.purchases.order_by('-date').first()
+        if last:
+            selling_qty = float(last.selling_qty) if last.selling_qty else 1
+            if selling_qty <= 0:
+                selling_qty = 1
+            return round(float(last.purchase_price) / selling_qty, 4)
+        return 0
 
 
 class SaleBillSerializer(serializers.ModelSerializer):
@@ -192,7 +230,6 @@ class SaleBillSerializer(serializers.ModelSerializer):
         for item_data in items_data:
             product  = item_data['product']
             qty      = Decimal(str(item_data['quantity']))
-            price    = item_data['price']
             batch_id = item_data.pop('batch_id', None)
             batch    = None
 
@@ -212,18 +249,20 @@ class SaleBillSerializer(serializers.ModelSerializer):
                 batch.save()
             else:
                 remaining = qty
-                batches = StockBatch.objects.filter(
+                for b in StockBatch.objects.filter(
                     product=product, quantity__gt=0
-                ).order_by('mrp', 'created_at')
-                for b in batches:
-                    if remaining <= 0: break
+                ).order_by('mrp', 'created_at'):
+                    if remaining <= 0:
+                        break
                     deduct = min(Decimal(str(b.quantity)), remaining)
                     b.quantity = Decimal(str(b.quantity)) - deduct
                     b.save()
                     remaining -= deduct
                 if remaining > Decimal('0.001'):
                     bill.delete()
-                    raise serializers.ValidationError(f"Insufficient stock for {product.name}")
+                    raise serializers.ValidationError(
+                        f"Insufficient stock for {product.name}"
+                    )
 
             SaleItem.objects.create(bill=bill, batch=batch, **item_data)
             product.stock_quantity = Decimal(str(product.stock_quantity)) - qty
@@ -264,30 +303,38 @@ class ReturnItemSerializer(serializers.ModelSerializer):
 
         if return_item.return_type == 'customer_return':
             product.stock_quantity = Decimal(str(product.stock_quantity)) + qty
-            latest_batch = StockBatch.objects.filter(product=product).order_by('-mrp', '-created_at').first()
-            if latest_batch:
-                latest_batch.quantity = Decimal(str(latest_batch.quantity)) + qty
-                latest_batch.save()
+            latest = StockBatch.objects.filter(product=product).order_by('-mrp', '-created_at').first()
+            if latest:
+                latest.quantity = Decimal(str(latest.quantity)) + qty
+                latest.save()
             else:
                 StockBatch.objects.create(product=product, mrp=product.selling_price, quantity=qty)
         elif return_item.return_type == 'damaged':
             product.damaged_quantity = Decimal(str(product.damaged_quantity)) + qty
             remaining = qty
             for b in StockBatch.objects.filter(product=product, quantity__gt=0).order_by('-mrp'):
-                if remaining <= 0: break
+                if remaining <= 0:
+                    break
                 deduct = min(Decimal(str(b.quantity)), remaining)
-                b.quantity = Decimal(str(b.quantity)) - deduct; b.save(); remaining -= deduct
+                b.quantity = Decimal(str(b.quantity)) - deduct
+                b.save()
+                remaining -= deduct
             product.stock_quantity = Decimal(str(product.stock_quantity)) - qty
-            if product.stock_quantity < 0: product.stock_quantity = Decimal('0')
+            if product.stock_quantity < 0:
+                product.stock_quantity = Decimal('0')
         elif return_item.return_type == 'expired':
             product.expired_quantity = Decimal(str(product.expired_quantity)) + qty
             remaining = qty
             for b in StockBatch.objects.filter(product=product, quantity__gt=0).order_by('mrp'):
-                if remaining <= 0: break
+                if remaining <= 0:
+                    break
                 deduct = min(Decimal(str(b.quantity)), remaining)
-                b.quantity = Decimal(str(b.quantity)) - deduct; b.save(); remaining -= deduct
+                b.quantity = Decimal(str(b.quantity)) - deduct
+                b.save()
+                remaining -= deduct
             product.stock_quantity = Decimal(str(product.stock_quantity)) - qty
-            if product.stock_quantity < 0: product.stock_quantity = Decimal('0')
+            if product.stock_quantity < 0:
+                product.stock_quantity = Decimal('0')
 
         product.save()
         return return_item
@@ -321,12 +368,18 @@ class InternalSaleSerializer(serializers.ModelSerializer):
             internal.delete()
             raise serializers.ValidationError(f"Insufficient stock for {product.name}")
         remaining = qty
-        for b in StockBatch.objects.filter(product=product, quantity__gt=0).order_by('mrp', 'created_at'):
-            if remaining <= 0: break
+        for b in StockBatch.objects.filter(
+            product=product, quantity__gt=0
+        ).order_by('mrp', 'created_at'):
+            if remaining <= 0:
+                break
             deduct = min(Decimal(str(b.quantity)), remaining)
-            b.quantity = Decimal(str(b.quantity)) - deduct; b.save(); remaining -= deduct
+            b.quantity = Decimal(str(b.quantity)) - deduct
+            b.save()
+            remaining -= deduct
         product.stock_quantity = Decimal(str(product.stock_quantity)) - qty
-        if product.stock_quantity < 0: product.stock_quantity = Decimal('0')
+        if product.stock_quantity < 0:
+            product.stock_quantity = Decimal('0')
         product.save()
         return internal
 
@@ -349,11 +402,15 @@ class PurchaseReturnSerializer(serializers.ModelSerializer):
         qty     = Decimal(str(pr.quantity))
         remaining = qty
         for b in StockBatch.objects.filter(product=product, quantity__gt=0).order_by('mrp'):
-            if remaining <= 0: break
+            if remaining <= 0:
+                break
             deduct = min(Decimal(str(b.quantity)), remaining)
-            b.quantity = Decimal(str(b.quantity)) - deduct; b.save(); remaining -= deduct
+            b.quantity = Decimal(str(b.quantity)) - deduct
+            b.save()
+            remaining -= deduct
         product.stock_quantity = Decimal(str(product.stock_quantity)) - qty
-        if product.stock_quantity < 0: product.stock_quantity = Decimal('0')
+        if product.stock_quantity < 0:
+            product.stock_quantity = Decimal('0')
         product.save()
         return pr
 
@@ -378,10 +435,10 @@ class DirectSaleSerializer(serializers.ModelSerializer):
 
 
 class StockAdjustmentRequestSerializer(serializers.ModelSerializer):
-    product_name         = serializers.CharField(source='product.name',           read_only=True)
-    product_barcode      = serializers.CharField(source='product.barcode',         read_only=True)
-    requested_by_name    = serializers.CharField(source='requested_by.username',   read_only=True)
-    reviewed_by_name     = serializers.CharField(source='reviewed_by.username',    read_only=True)
+    product_name      = serializers.CharField(source='product.name',         read_only=True)
+    product_barcode   = serializers.CharField(source='product.barcode',       read_only=True)
+    requested_by_name = serializers.CharField(source='requested_by.username', read_only=True)
+    reviewed_by_name  = serializers.CharField(source='reviewed_by.username',  read_only=True)
 
     class Meta:
         model  = StockAdjustmentRequest
@@ -390,3 +447,58 @@ class StockAdjustmentRequestSerializer(serializers.ModelSerializer):
                   'requested_by_name', 'reviewed_by_name',
                   'created_at', 'reviewed_at']
         read_only_fields = ['id', 'status', 'created_at', 'reviewed_at']
+
+
+class StockTransferSerializer(serializers.ModelSerializer):
+    product_name    = serializers.CharField(source='product.name',    read_only=True)
+    product_barcode = serializers.CharField(source='product.barcode', read_only=True)
+
+    new_product_name = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    new_barcode      = serializers.CharField(write_only=True, required=False, allow_blank=True)
+
+    class Meta:
+        model  = StockTransfer
+        fields = ['id', 'product', 'product_name', 'product_barcode',
+                  'quantity', 'mrp', 'purchase_price', 'tax', 'date',
+                  'new_product_name', 'new_barcode']
+        read_only_fields = ['id', 'date']
+        extra_kwargs = {'product': {'required': False}}
+
+    def create(self, validated_data):
+        new_name    = validated_data.pop('new_product_name', '').strip()
+        new_barcode = validated_data.pop('new_barcode', '').strip()
+        product     = validated_data.pop('product', None)
+
+        if not product:
+            if not new_name:
+                raise serializers.ValidationError(
+                    "Product name is required when creating a new product."
+                )
+            create_kwargs = {'name': new_name, 'selling_price': validated_data['mrp']}
+            if new_barcode:
+                create_kwargs['barcode'] = new_barcode
+            product = Product.objects.create(**create_kwargs)
+
+        product.selling_price = validated_data['mrp']
+        product.save()
+
+        mrp_decimal = Decimal(str(validated_data['mrp'])).quantize(Decimal('0.01'))
+        qty         = Decimal(str(validated_data['quantity']))
+
+        existing = None
+        for b in StockBatch.objects.filter(product=product):
+            if Decimal(str(b.mrp)).quantize(Decimal('0.01')) == mrp_decimal:
+                existing = b
+                break
+
+        if existing:
+            existing.quantity = Decimal(str(existing.quantity)) + qty
+            existing.save()
+        else:
+            StockBatch.objects.create(product=product, mrp=mrp_decimal, quantity=qty)
+
+        product.stock_quantity = Decimal(str(product.stock_quantity)) + qty
+        product.save()
+
+        transfer = StockTransfer.objects.create(product=product, **validated_data)
+        return transfer

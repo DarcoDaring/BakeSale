@@ -15,7 +15,6 @@ router.register(r'purchase-returns',  views.PurchaseReturnViewSet)
 router.register(r'direct-masters',    views.DirectSaleMasterViewSet)
 router.register(r'direct-sales',      views.DirectSaleViewSet)
 router.register(r'stock-adjustments', views.StockAdjustmentRequestViewSet)
+router.register(r'stock-transfers',   views.StockTransferViewSet)
 
-urlpatterns = [
-    path('', include(router.urls)),
-]
+urlpatterns = [path('', include(router.urls))]

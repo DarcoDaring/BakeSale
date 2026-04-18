@@ -60,9 +60,7 @@ export default function Login() {
             </button>
           </form>
         </div>
-        <p style={{ textAlign: 'center', color: 'var(--text3)', fontSize: 12, marginTop: 20 }}>
-          Default admin: <span style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>admin / admin123</span>
-        </p>
+        
       </div>
     </div>
   );

@@ -56,9 +56,7 @@ class Vendor(models.Model):
 
 class Product(models.Model):
     UNIT_CHOICES = [
-        ('nos',    'Nos'),
-        ('kg',     'Kg'),
-        ('carton', 'Carton'),
+        ('nos', 'Nos'), ('kg', 'Kg'), ('case', 'case'),
     ]
     barcode          = models.CharField(max_length=50, unique=True, blank=True)
     name             = models.CharField(max_length=200)
@@ -113,37 +111,32 @@ class PurchaseBill(models.Model):
         return f"PO{num:06d}"
 
     def __str__(self):
-        return f"Purchase #{self.purchase_number} — {self.vendor}"
+        return f"Purchase #{self.purchase_number}"
 
 
 class Purchase(models.Model):
     UNIT_CHOICES = [
-        ('nos',    'Nos'),
-        ('kg',     'Kg'),
-        ('carton', 'Carton'),
+        ('nos', 'Nos'), ('kg', 'Kg'), ('case', 'case'),
     ]
     bill           = models.ForeignKey(PurchaseBill, on_delete=models.CASCADE, related_name='items', null=True, blank=True)
     product        = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='purchases')
     purchase_unit  = models.CharField(max_length=10, choices=UNIT_CHOICES, default='nos')
     quantity       = models.DecimalField(max_digits=12, decimal_places=3)
     purchase_price = models.DecimalField(max_digits=10, decimal_places=2)
-    tax            = models.DecimalField(max_digits=5,  decimal_places=2, default=0)
+    tax            = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     mrp            = models.DecimalField(max_digits=10, decimal_places=2)
     selling_unit   = models.CharField(max_length=10, choices=UNIT_CHOICES, default='nos')
     selling_qty    = models.DecimalField(max_digits=12, decimal_places=3, default=1)
     date           = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"Purchase: {self.product.name} x{self.quantity} @ ₹{self.mrp}"
+        return f"Purchase: {self.product.name} x{self.quantity}"
 
 
 class SaleBill(models.Model):
     PAYMENT_CHOICES = [
-        ('cash',      'Cash'),
-        ('card',      'Card'),
-        ('upi',       'UPI'),
-        ('cash_card', 'Cash & Card'),
-        ('cash_upi',  'Cash & UPI'),
+        ('cash', 'Cash'), ('card', 'Card'), ('upi', 'UPI'),
+        ('cash_card', 'Cash & Card'), ('cash_upi', 'Cash & UPI'),
     ]
     bill_number  = models.CharField(max_length=20, unique=True)
     total_amount = models.DecimalField(max_digits=12, decimal_places=2)
@@ -188,8 +181,8 @@ class SaleItem(models.Model):
 class ReturnItem(models.Model):
     RETURN_TYPE_CHOICES = [
         ('customer_return', 'Customer Return'),
-        ('damaged',         'Damaged'),
-        ('expired',         'Expired'),
+        ('damaged', 'Damaged'),
+        ('expired', 'Expired'),
     ]
     product      = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='returns')
     return_type  = models.CharField(max_length=20, choices=RETURN_TYPE_CHOICES)
@@ -224,15 +217,14 @@ class InternalSale(models.Model):
 
 
 class PurchaseReturn(models.Model):
-    """Return status: pending = not yet physically returned, returned = done"""
     STATUS_CHOICES = [
-        ('pending',  'Pending Return'),
+        ('pending', 'Pending Return'),
         ('returned', 'Product Returned'),
     ]
     product        = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='purchase_returns')
     quantity       = models.DecimalField(max_digits=12, decimal_places=3)
     purchase_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    tax            = models.DecimalField(max_digits=5,  decimal_places=2, default=0)
+    tax            = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     reason         = models.TextField(blank=True)
     status         = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
     date           = models.DateTimeField(auto_now_add=True)
@@ -240,8 +232,7 @@ class PurchaseReturn(models.Model):
 
     @property
     def item_cost(self):
-        price_with_tax = float(self.purchase_price) * (1 + float(self.tax) / 100)
-        return price_with_tax * float(self.quantity)
+        return float(self.purchase_price) * (1 + float(self.tax) / 100) * float(self.quantity)
 
     def __str__(self):
         return f"PurchaseReturn: {self.product.name} x{self.quantity}"
@@ -259,11 +250,8 @@ class DirectSaleMaster(models.Model):
 
 class DirectSale(models.Model):
     PAYMENT_CHOICES = [
-        ('cash',      'Cash'),
-        ('card',      'Card'),
-        ('upi',       'UPI'),
-        ('cash_card', 'Cash & Card'),
-        ('cash_upi',  'Cash & UPI'),
+        ('cash', 'Cash'), ('card', 'Card'), ('upi', 'UPI'),
+        ('cash_card', 'Cash & Card'), ('cash_upi', 'Cash & UPI'),
     ]
     item         = models.ForeignKey(DirectSaleMaster, on_delete=models.CASCADE, related_name='sales')
     price        = models.DecimalField(max_digits=10, decimal_places=2)
@@ -280,9 +268,7 @@ class DirectSale(models.Model):
 
 class StockAdjustmentRequest(models.Model):
     STATUS_CHOICES = [
-        ('pending',  'Pending'),
-        ('approved', 'Approved'),
-        ('rejected', 'Rejected'),
+        ('pending', 'Pending'), ('approved', 'Approved'), ('rejected', 'Rejected'),
     ]
     product        = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='stock_adjustments')
     system_stock   = models.DecimalField(max_digits=12, decimal_places=3)
@@ -295,4 +281,21 @@ class StockAdjustmentRequest(models.Model):
     reviewed_at    = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
-        return f"StockAdj: {self.product.name} {self.system_stock}→{self.physical_stock} [{self.status}]"
+        return f"StockAdj: {self.product.name} [{self.status}]"
+
+
+class StockTransfer(models.Model):
+    """
+    One-time stock seeding from existing billing software.
+    Creates/updates product and seeds stock without a purchase record.
+    """
+    product        = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='stock_transfers')
+    quantity       = models.DecimalField(max_digits=12, decimal_places=3)
+    mrp            = models.DecimalField(max_digits=10, decimal_places=2)
+    purchase_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    tax            = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    date           = models.DateTimeField(auto_now_add=True)
+    created_by     = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+
+    def __str__(self):
+        return f"StockTransfer: {self.product.name} x{self.quantity}"

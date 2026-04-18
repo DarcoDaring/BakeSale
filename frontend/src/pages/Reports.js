@@ -4,18 +4,27 @@ import {
   getSaleReport, getItemWiseReport,
   getInternalSaleReport, getInternalMasters,
   getPurchaseReturnReport, getPurchaseReport,
-  getPurchaseBill, markPurchaseReturned
+  getPurchaseBill, markPurchaseReturned,
+  getSalesTaxReport, getPurchaseTaxReport
 } from '../services/api';
 
 const fmt = n => `₹${parseFloat(n || 0).toFixed(2)}`;
-const payLabel = {
-  cash: 'Cash', card: 'Card', upi: 'UPI',
-  cash_card: 'Cash & Card', cash_upi: 'Cash & UPI',
-};
+const payLabel = { cash:'Cash', card:'Card', upi:'UPI', cash_card:'Cash & Card', cash_upi:'Cash & UPI' };
 const today = () => new Date().toISOString().split('T')[0];
 
+function doPrint(html) {
+  let el = document.getElementById('bakesale-print-container');
+  if (!el) { el = document.createElement('div'); el.id = 'bakesale-print-container'; document.body.appendChild(el); }
+  el.innerHTML = html;
+  const root = document.getElementById('root');
+  root.style.display = 'none';
+  window.print();
+  root.style.display = '';
+  el.innerHTML = '';
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Print Date Range Modal
+// Print Modal
 // ─────────────────────────────────────────────────────────────────────────────
 function PrintModal({ onClose, onPrint, title }) {
   const t = today();
@@ -33,7 +42,7 @@ function PrintModal({ onClose, onPrint, title }) {
   return (
     <div className="modal-overlay">
       <div className="modal" style={{ maxWidth: 380 }}>
-        <h2>🖨️ {title || 'Print Report'}</h2>
+        <h2>🖨️ {title}</h2>
         <div className="form-row">
           <div className="form-group" style={{ margin: 0 }}>
             <label>From Date</label>
@@ -60,21 +69,16 @@ function PrintModal({ onClose, onPrint, title }) {
 // Purchase Bill Detail Modal
 // ─────────────────────────────────────────────────────────────────────────────
 function PurchaseBillDetailModal({ billId, onClose }) {
-  const [bill,    setBill]    = useState(null);
+  const [bill, setBill]     = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    getPurchaseBill(billId)
-      .then(r => setBill(r.data))
+    getPurchaseBill(billId).then(r => setBill(r.data))
       .catch(() => { alert('Failed to load bill'); onClose(); })
       .finally(() => setLoading(false));
   }, [billId]);
 
-  if (loading) return (
-    <div className="modal-overlay">
-      <div className="modal" style={{ maxWidth: 700 }}><div className="spinner" /></div>
-    </div>
-  );
+  if (loading) return <div className="modal-overlay"><div className="modal" style={{ maxWidth: 700 }}><div className="spinner" /></div></div>;
   if (!bill) return null;
 
   const totalValue = bill.items.reduce((s, item) => {
@@ -91,26 +95,20 @@ function PurchaseBillDetailModal({ billId, onClose }) {
             <h2 style={{ margin: 0 }}>📦 Purchase Detail</h2>
             <div style={{ display: 'flex', gap: 12, marginTop: 6, alignItems: 'center' }}>
               <span className="badge badge-orange" style={{ fontFamily: 'var(--mono)', fontSize: 14 }}>{bill.purchase_number}</span>
-              <span className={`badge ${bill.is_paid ? 'badge-green' : 'badge-yellow'}`}>
-                {bill.is_paid ? '✅ Paid' : '⏳ Not Paid'}
-              </span>
+              <span className={`badge ${bill.is_paid ? 'badge-green' : 'badge-yellow'}`}>{bill.is_paid ? '✅ Paid' : '⏳ Not Paid'}</span>
               <span style={{ color: 'var(--text3)', fontSize: 13 }}>{new Date(bill.date).toLocaleString()}</span>
             </div>
           </div>
           <button className="btn btn-secondary btn-sm" onClick={onClose}>✕ Close</button>
         </div>
         <div style={{ background: 'var(--bg3)', borderRadius: 'var(--radius)', padding: '12px 16px', marginBottom: 16 }}>
-          <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 2 }}>Vendor</div>
+          <div style={{ fontSize: 12, color: 'var(--text3)' }}>Vendor</div>
           <div style={{ fontWeight: 700, fontSize: 16 }}>{bill.vendor_name || '—'}</div>
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
           <table>
             <thead>
-              <tr>
-                <th>Product</th><th>Pur. Unit</th><th>Qty</th>
-                <th>Price</th><th>Tax %</th><th>MRP</th>
-                <th>Sell Unit</th><th>Qty/Unit</th><th>Stock Added</th><th>Value</th>
-              </tr>
+              <tr><th>Product</th><th>Pur. Unit</th><th>Qty</th><th>Price</th><th>Tax %</th><th>MRP</th><th>Sell Unit</th><th>Qty/Unit</th><th>Stock Added</th><th>Value</th></tr>
             </thead>
             <tbody>
               {bill.items.map((item, i) => {
@@ -138,7 +136,7 @@ function PurchaseBillDetailModal({ billId, onClose }) {
             </tbody>
           </table>
         </div>
-        <div style={{ borderTop: '2px solid var(--accent)', padding: '14px 16px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 16 }}>
+        <div style={{ borderTop: '2px solid var(--accent)', padding: '14px 16px', display: 'flex', justifyContent: 'flex-end', gap: 16 }}>
           <span style={{ color: 'var(--text3)', fontSize: 14 }}>Total Purchase Value (incl. tax)</span>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 24, fontWeight: 800, color: 'var(--accent)' }}>{fmt(totalValue)}</span>
         </div>
@@ -148,7 +146,7 @@ function PurchaseBillDetailModal({ billId, onClose }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Pending Returns Modal (clicked from stat card)
+// Pending Returns Modal
 // ─────────────────────────────────────────────────────────────────────────────
 function PendingReturnsModal({ returns, onClose }) {
   return (
@@ -164,7 +162,7 @@ function PendingReturnsModal({ returns, onClose }) {
             <tbody>
               {returns.filter(r => r.status === 'pending').map((r, i) => (
                 <tr key={i}>
-                  <td style={{ fontWeight: 600, color: 'var(--text)' }}>{r.product_name}</td>
+                  <td style={{ fontWeight: 600 }}>{r.product_name}</td>
                   <td><span className="badge badge-red">{r.quantity}</span></td>
                   <td style={{ fontSize: 12, color: 'var(--text3)' }}>{new Date(r.date).toLocaleString()}</td>
                   <td style={{ color: 'var(--text3)', fontSize: 13 }}>{r.reason || '—'}</td>
@@ -182,7 +180,7 @@ function PendingReturnsModal({ returns, onClose }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Purchase Bills List Modal (clicked from Paid / Not Paid cards)
+// Purchase Bills List Modal
 // ─────────────────────────────────────────────────────────────────────────────
 function PurchaseBillsListModal({ bills, title, onClose, onViewDetail }) {
   return (
@@ -194,14 +192,12 @@ function PurchaseBillsListModal({ bills, title, onClose, onViewDetail }) {
         </div>
         <div style={{ overflowY: 'auto' }}>
           <table>
-            <thead>
-              <tr><th>PO Number</th><th>Vendor</th><th>Date</th><th>Items</th><th>Total Value</th><th style={{ textAlign: 'right' }}>Actions</th></tr>
-            </thead>
+            <thead><tr><th>PO Number</th><th>Vendor</th><th>Date</th><th>Items</th><th>Total Value</th><th style={{ textAlign: 'right' }}>Actions</th></tr></thead>
             <tbody>
               {bills.map((b, i) => (
                 <tr key={i} style={{ cursor: 'pointer' }} onClick={() => onViewDetail(b.id)}>
                   <td><span className="badge badge-orange" style={{ fontFamily: 'var(--mono)' }}>{b.purchase_number}</span></td>
-                  <td style={{ fontWeight: 600, color: 'var(--text)' }}>{b.vendor_name}</td>
+                  <td style={{ fontWeight: 600 }}>{b.vendor_name}</td>
                   <td style={{ fontSize: 12, color: 'var(--text3)' }}>{new Date(b.date).toLocaleDateString()}</td>
                   <td><span className="badge badge-blue">{b.item_count}</span></td>
                   <td style={{ fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{fmt(b.total_value)}</td>
@@ -225,31 +221,36 @@ function PurchaseBillsListModal({ bills, title, onClose, onViewDetail }) {
 // Main Reports Page
 // ─────────────────────────────────────────────────────────────────────────────
 export default function Reports() {
-  const [tab,              setTab]              = useState('sale');
-  const [saleData,         setSaleData]         = useState(null);
-  const [itemData,         setItemData]         = useState([]);
-  const [intData,          setIntData]          = useState([]);
-  const [purRetData,       setPurRetData]       = useState(null);
-  const [purData,          setPurData]          = useState(null);
-  const [masters,          setMasters]          = useState([]);
-  const [selDests,         setSelDests]         = useState([]);
-  const [loading,          setLoading]          = useState(false);
-  const [dateFrom,         setDateFrom]         = useState('');
-  const [dateTo,           setDateTo]           = useState('');
-  const [showPrintModal,   setShowPrintModal]   = useState(false);
-  const [showPurPrint,     setShowPurPrint]     = useState(false);
-  const [detailBillId,     setDetailBillId]     = useState(null);
-  const [showPendingRet,   setShowPendingRet]   = useState(false);
-  const [purListModal,     setPurListModal]     = useState(null); // { bills, title }
-  const [markingId,        setMarkingId]        = useState(null);
+  const [tab,            setTab]            = useState('sale');
+  const [saleData,       setSaleData]       = useState(null);
+  const [itemData,       setItemData]       = useState([]);
+  const [intData,        setIntData]        = useState([]);
+  const [purRetData,     setPurRetData]     = useState(null);
+  const [purData,        setPurData]        = useState(null);
+  const [salesTaxData,   setSalesTaxData]   = useState(null);
+  const [purTaxData,     setPurTaxData]     = useState(null);
+  const [masters,        setMasters]        = useState([]);
+  const [selDests,       setSelDests]       = useState([]);
+  const [loading,        setLoading]        = useState(false);
+  const [dateFrom,       setDateFrom]       = useState('');
+  const [dateTo,         setDateTo]         = useState('');
+  const [showPrintModal, setShowPrintModal] = useState(false);
+  const [showPurPrint,   setShowPurPrint]   = useState(false);
+  const [showSalesTaxPrint, setShowSalesTaxPrint] = useState(false);
+  const [showPurTaxPrint,   setShowPurTaxPrint]   = useState(false);
+  const [detailBillId,   setDetailBillId]   = useState(null);
+  const [showPendingRet, setShowPendingRet] = useState(false);
+  const [purListModal,   setPurListModal]   = useState(null);
+  const [markingId,      setMarkingId]      = useState(null);
 
   useEffect(() => { getInternalMasters().then(r => setMasters(r.data)); }, []);
 
-  // Sale report loads today by default on mount
   useEffect(() => {
-    if (tab === 'sale') fetchReport('sale');
-    else if (tab === 'purchase') fetchReport('purchase');
-    else if (tab === 'purreturn') fetchReport('purreturn');
+    if (tab === 'sale')      fetchReport('sale');
+    if (tab === 'purchase')  fetchReport('purchase');
+    if (tab === 'purreturn') fetchReport('purreturn');
+    if (tab === 'salestax')  fetchReport('salestax');
+    if (tab === 'purtax')    fetchReport('purtax');
   }, [tab]);
 
   const fetchReport = async (overrideTab) => {
@@ -262,7 +263,6 @@ export default function Reports() {
       if (activeTab === 'sale') {
         const { data } = await getSaleReport(params);
         setSaleData(data);
-        // Sync the date inputs with what the backend used
         if (!dateFrom && data.date_from) setDateFrom(data.date_from);
         if (!dateTo   && data.date_to)   setDateTo(data.date_to);
       } else if (activeTab === 'itemwise') {
@@ -278,34 +278,34 @@ export default function Reports() {
       } else if (activeTab === 'purchase') {
         const { data } = await getPurchaseReport(params);
         setPurData(data);
+      } else if (activeTab === 'salestax') {
+        const { data } = await getSalesTaxReport(params);
+        setSalesTaxData(data);
+      } else if (activeTab === 'purtax') {
+        const { data } = await getPurchaseTaxReport(params);
+        setPurTaxData(data);
       }
     } catch {}
     setLoading(false);
   };
 
-  const toggleDest = id =>
-    setSelDests(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const toggleDest = id => setSelDests(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
-  const handleMarkReturned = async (id) => {
+  const handleMarkReturned = async id => {
     setMarkingId(id);
-    try {
-      await markPurchaseReturned(id);
-      toast.success('Marked as returned');
-      fetchReport('purreturn');
-    } catch { toast.error('Failed to update status'); }
+    try { await markPurchaseReturned(id); toast.success('Marked as returned'); fetchReport('purreturn'); }
+    catch { toast.error('Failed to update status'); }
     finally { setMarkingId(null); }
   };
 
-  // Sale print
+  // ── Sale print ──────────────────────────────────────────────────────────
   const handleSalePrint = async (from, to) => {
     try {
       const { data } = await getSaleReport({ date_from: from, date_to: to });
       setShowPrintModal(false);
       setTimeout(() => {
-        let el = document.getElementById('bakesale-print-container');
-        if (!el) { el = document.createElement('div'); el.id = 'bakesale-print-container'; document.body.appendChild(el); }
         const { bills, totals } = data;
-        el.innerHTML = `
+        doPrint(`
           <div style="font-family:Arial,sans-serif;font-size:13px;color:#000;background:#fff;padding:32px">
             <div style="text-align:center;margin-bottom:24px">
               <div style="font-size:22px;font-weight:800">BAKESALE</div>
@@ -339,26 +339,19 @@ export default function Reports() {
                 <td style="border:1px solid #ccc;padding:7px;text-align:right;font-weight:800">${fmt(totals.grand_total)}</td>
               </tr></tfoot>
             </table>
-          </div>`;
-        const root = document.getElementById('root');
-        root.style.display = 'none';
-        window.print();
-        root.style.display = '';
-        el.innerHTML = '';
+          </div>`);
       }, 300);
     } catch { alert('Failed to load report for printing'); }
   };
 
-  // Purchase print
+  // ── Purchase print ────────────────────────────────────────────────────────
   const handlePurchasePrint = async (from, to) => {
     try {
       const { data } = await getPurchaseReport({ date_from: from, date_to: to });
       setShowPurPrint(false);
       setTimeout(() => {
-        let el = document.getElementById('bakesale-print-container');
-        if (!el) { el = document.createElement('div'); el.id = 'bakesale-print-container'; document.body.appendChild(el); }
         const { bills, grand_total } = data;
-        el.innerHTML = `
+        doPrint(`
           <div style="font-family:Arial,sans-serif;font-size:13px;color:#000;background:#fff;padding:32px">
             <div style="text-align:center;margin-bottom:24px">
               <div style="font-size:22px;font-weight:800">BAKESALE</div>
@@ -391,22 +384,117 @@ export default function Reports() {
                 <td style="border:1px solid #ccc;padding:7px"></td>
               </tr></tfoot>
             </table>
-          </div>`;
-        const root = document.getElementById('root');
-        root.style.display = 'none';
-        window.print();
-        root.style.display = '';
-        el.innerHTML = '';
+          </div>`);
       }, 300);
-    } catch { alert('Failed to load report for printing'); }
+    } catch { alert('Failed to load purchase report for printing'); }
   };
 
-  // Internal helpers
+  // ── Sales Tax print ──────────────────────────────────────────────────────
+  const handleSalesTaxPrint = async (from, to) => {
+    try {
+      const { data } = await getSalesTaxReport({ date_from: from, date_to: to });
+      setShowSalesTaxPrint(false);
+      setTimeout(() => {
+        const rows = data.bills.map((b, i) => `
+          <tr style="background:${i%2===0?'#fff':'#fafafa'}">
+            <td style="border:1px solid #ccc;padding:6px;font-weight:600">${b.bill_number}</td>
+            <td style="border:1px solid #ccc;padding:6px">${new Date(b.date).toLocaleDateString()}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(b.total_amount)}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(b.taxable_amount)}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(b.cgst)}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(b.sgst)}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right;font-weight:600">${fmt(b.total_tax)}</td>
+          </tr>`).join('');
+        doPrint(`
+          <div style="font-family:Arial,sans-serif;font-size:13px;color:#000;background:#fff;padding:32px">
+            <div style="text-align:center;margin-bottom:24px">
+              <div style="font-size:22px;font-weight:800">BAKESALE</div>
+              <div style="font-size:15px;font-weight:600">Sales Tax Report</div>
+              <div style="font-size:12px;color:#555">${from} to ${to}</div>
+              <div style="font-size:11px;color:#888">Printed: ${new Date().toLocaleString()}</div>
+            </div>
+            <table style="width:100%;border-collapse:collapse;font-size:12px">
+              <thead><tr style="background:#f0f0f0">
+                <th style="border:1px solid #ccc;padding:7px">Bill No</th>
+                <th style="border:1px solid #ccc;padding:7px">Date</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">Bill Amount</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">Taxable Amount</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">CGST</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">SGST</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">Total Tax</th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+              <tfoot><tr style="background:#f0f0f0;font-weight:800">
+                <td colspan="2" style="border:1px solid #ccc;padding:7px">TOTAL (${data.bills.length} bills)</td>
+                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_bill_total)}</td>
+                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_taxable)}</td>
+                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_cgst)}</td>
+                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_sgst)}</td>
+                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_tax)}</td>
+              </tr></tfoot>
+            </table>
+            <div style="text-align:center;margin-top:28px;font-size:11px;color:#aaa">— End of Report —</div>
+          </div>`);
+      }, 300);
+    } catch { alert('Failed to load sales tax report'); }
+  };
+
+  // ── Purchase Tax print ────────────────────────────────────────────────────
+  const handlePurTaxPrint = async (from, to) => {
+    try {
+      const { data } = await getPurchaseTaxReport({ date_from: from, date_to: to });
+      setShowPurTaxPrint(false);
+      setTimeout(() => {
+        const rows = data.bills.map((b, i) => `
+          <tr style="background:${i%2===0?'#fff':'#fafafa'}">
+            <td style="border:1px solid #ccc;padding:6px;font-weight:600;font-family:monospace">${b.purchase_number}</td>
+            <td style="border:1px solid #ccc;padding:6px">${new Date(b.date).toLocaleDateString()}</td>
+            <td style="border:1px solid #ccc;padding:6px">${b.vendor_name}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(b.taxable_amount)}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(b.cgst)}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(b.sgst)}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right;font-weight:600">${fmt(b.total_tax)}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right;font-weight:600">${fmt(b.total_amount)}</td>
+          </tr>`).join('');
+        doPrint(`
+          <div style="font-family:Arial,sans-serif;font-size:13px;color:#000;background:#fff;padding:32px">
+            <div style="text-align:center;margin-bottom:24px">
+              <div style="font-size:22px;font-weight:800">BAKESALE</div>
+              <div style="font-size:15px;font-weight:600">Purchase Tax Report</div>
+              <div style="font-size:12px;color:#555">${from} to ${to}</div>
+              <div style="font-size:11px;color:#888">Printed: ${new Date().toLocaleString()}</div>
+            </div>
+            <table style="width:100%;border-collapse:collapse;font-size:12px">
+              <thead><tr style="background:#f0f0f0">
+                <th style="border:1px solid #ccc;padding:7px">PO Number</th>
+                <th style="border:1px solid #ccc;padding:7px">Date</th>
+                <th style="border:1px solid #ccc;padding:7px">Vendor</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">Taxable Amount</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">CGST</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">SGST</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">Total Tax</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">Total Amount</th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+              <tfoot><tr style="background:#f0f0f0;font-weight:800">
+                <td colspan="3" style="border:1px solid #ccc;padding:7px">TOTAL (${data.bills.length} purchases)</td>
+                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_taxable)}</td>
+                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_cgst)}</td>
+                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_sgst)}</td>
+                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_tax)}</td>
+                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_total)}</td>
+              </tr></tfoot>
+            </table>
+            <div style="text-align:center;margin-top:28px;font-size:11px;color:#aaa">— End of Report —</div>
+          </div>`);
+      }, 300);
+    } catch { alert('Failed to load purchase tax report'); }
+  };
+
   const intByDest     = intData.reduce((acc, row) => {
     const key = row.destination_name;
     if (!acc[key]) acc[key] = { items: [], total: 0 };
-    acc[key].items.push(row);
-    acc[key].total += row.total_amount;
+    acc[key].items.push(row); acc[key].total += row.total_amount;
     return acc;
   }, {});
   const intGrandTotal = intData.reduce((s, r) => s + r.total_amount, 0);
@@ -414,28 +502,26 @@ export default function Reports() {
 
   const TABS = [
     { k: 'sale',      label: '🧾 Sale Report' },
-    { k: 'itemwise',  label: '📦 Item-wise Report' },
-    { k: 'internal',  label: '🏭 Internal Sale Report' },
+    { k: 'itemwise',  label: '📦 Item-wise' },
+    { k: 'internal',  label: '🏭 Internal Sale' },
     { k: 'purreturn', label: '↩️ Purchase Return' },
     { k: 'purchase',  label: '📦 Purchase Report' },
+    { k: 'salestax',  label: '🧾 Sales Tax Report' },
+    { k: 'purtax',    label: '📋 Purchase Tax Report' },
   ];
 
   return (
     <div>
       <div className="page-header">
         <h1>📊 Reports</h1>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={{ width: 160 }} />
-          <input type="date" value={dateTo}   onChange={e => setDateTo(e.target.value)}   style={{ width: 160 }} />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={{ width: 155 }} />
+          <input type="date" value={dateTo}   onChange={e => setDateTo(e.target.value)}   style={{ width: 155 }} />
           <button className="btn btn-primary" onClick={() => fetchReport()}>Filter</button>
-          {tab === 'sale' && (
-            <button className="btn btn-secondary" onClick={() => setShowPrintModal(true)}
-              style={{ color: 'var(--accent)', borderColor: 'var(--accent)' }}>🖨️ Print</button>
-          )}
-          {tab === 'purchase' && (
-            <button className="btn btn-secondary" onClick={() => setShowPurPrint(true)}
-              style={{ color: 'var(--accent)', borderColor: 'var(--accent)' }}>🖨️ Print Full Report</button>
-          )}
+          {tab === 'sale'     && <button className="btn btn-secondary" onClick={() => setShowPrintModal(true)} style={{ color: 'var(--accent)', borderColor: 'var(--accent)' }}>🖨️ Print</button>}
+          {tab === 'purchase' && <button className="btn btn-secondary" onClick={() => setShowPurPrint(true)} style={{ color: 'var(--accent)', borderColor: 'var(--accent)' }}>🖨️ Print Report</button>}
+          {tab === 'salestax' && <button className="btn btn-secondary" onClick={() => setShowSalesTaxPrint(true)} style={{ color: 'var(--green)', borderColor: 'var(--green)' }}>🖨️ Print Report</button>}
+          {tab === 'purtax'   && <button className="btn btn-secondary" onClick={() => setShowPurTaxPrint(true)} style={{ color: 'var(--blue)', borderColor: 'var(--blue)' }}>🖨️ Print Report</button>}
         </div>
       </div>
 
@@ -446,14 +532,14 @@ export default function Reports() {
             background: tab === t.k ? 'var(--accent)' : 'var(--surface)',
             color:      tab === t.k ? '#fff'          : 'var(--text2)',
             border:    `1px solid ${tab === t.k ? 'var(--accent)' : 'var(--border)'}`,
-            fontSize: 14, fontWeight: 600,
+            fontSize: 13, fontWeight: 600,
           }}>{t.label}</button>
         ))}
       </div>
 
       {loading ? <div className="spinner" /> : (
         <>
-          {/* ── Sale Report — shows today by default ── */}
+          {/* ── Sale Report ── */}
           {tab === 'sale' && (
             <>
               {saleData && (
@@ -462,7 +548,7 @@ export default function Reports() {
                 </div>
               )}
               {saleData ? (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 16 }}>
                   {[
                     { label: 'Grand Total', value: fmt(saleData.totals.grand_total), color: 'var(--accent)' },
                     { label: 'Cash Total',  value: fmt(saleData.totals.cash_total),  color: 'var(--green)' },
@@ -481,7 +567,7 @@ export default function Reports() {
             </>
           )}
 
-          {/* ── Item-wise Report ── */}
+          {/* ── Item-wise ── */}
           {tab === 'itemwise' && (
             <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
               <table>
@@ -502,7 +588,7 @@ export default function Reports() {
             </div>
           )}
 
-          {/* ── Internal Sale Report ── */}
+          {/* ── Internal Sale ── */}
           {tab === 'internal' && (
             <>
               {masters.length > 0 && (
@@ -521,74 +607,56 @@ export default function Reports() {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16, marginBottom: 20 }}>
                   <div className="stat-card"><div className="label">Total Items Transferred</div><div className="value" style={{ color: 'var(--purple)', fontSize: 22 }}>{intTotalQty}</div></div>
                   <div className="stat-card"><div className="label">Destinations Used</div><div className="value" style={{ color: 'var(--blue)', fontSize: 22 }}>{Object.keys(intByDest).length}</div></div>
-                  <div className="stat-card"><div className="label">Total Value Transferred</div><div className="value" style={{ color: 'var(--accent)', fontSize: 22 }}>{fmt(intGrandTotal)}</div></div>
+                  <div className="stat-card"><div className="label">Total Value</div><div className="value" style={{ color: 'var(--accent)', fontSize: 22 }}>{fmt(intGrandTotal)}</div></div>
                 </div>
               )}
               {Object.keys(intByDest).length === 0 ? (
                 <div className="empty-state"><div className="icon">🏭</div>No internal sales in this period</div>
-              ) : (
-                Object.entries(intByDest).map(([destName, group]) => (
-                  <div key={destName} className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 20 }}>
-                    <div style={{ padding: '12px 16px', background: 'var(--bg2)', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between' }}>
-                      <div style={{ fontWeight: 700 }}>🏭 {destName}</div>
-                      <div style={{ fontFamily: 'var(--mono)', color: 'var(--accent)', fontWeight: 700 }}>{fmt(group.total)}</div>
-                    </div>
-                    <table>
-                      <thead><tr><th>Product</th><th>Barcode</th><th>MRP</th><th>Qty</th><th>Total Value</th></tr></thead>
-                      <tbody>
-                        {group.items.map((item, i) => (
-                          <tr key={i}>
-                            <td style={{ fontWeight: 600 }}>{item.product_name}</td>
-                            <td><span style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{item.product_barcode}</span></td>
-                            <td style={{ fontFamily: 'var(--mono)' }}>{fmt(item.mrp)}</td>
-                            <td><span className="badge badge-purple">{item.quantity}</span></td>
-                            <td style={{ fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{fmt(item.total_amount)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+              ) : Object.entries(intByDest).map(([destName, group]) => (
+                <div key={destName} className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 20 }}>
+                  <div style={{ padding: '12px 16px', background: 'var(--bg2)', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between' }}>
+                    <div style={{ fontWeight: 700 }}>🏭 {destName}</div>
+                    <div style={{ fontFamily: 'var(--mono)', color: 'var(--accent)', fontWeight: 700 }}>{fmt(group.total)}</div>
                   </div>
-                ))
-              )}
+                  <table>
+                    <thead><tr><th>Product</th><th>Barcode</th><th>MRP</th><th>Qty</th><th>Total Value</th></tr></thead>
+                    <tbody>
+                      {group.items.map((item, i) => (
+                        <tr key={i}>
+                          <td style={{ fontWeight: 600 }}>{item.product_name}</td>
+                          <td><span style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{item.product_barcode}</span></td>
+                          <td style={{ fontFamily: 'var(--mono)' }}>{fmt(item.mrp)}</td>
+                          <td><span className="badge badge-purple">{item.quantity}</span></td>
+                          <td style={{ fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{fmt(item.total_amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
             </>
           )}
 
-          {/* ── Purchase Return Report ── */}
+          {/* ── Purchase Return ── */}
           {tab === 'purreturn' && (
             <>
-              {/* Only 1 card: pending count */}
               {purRetData && (
                 <div style={{ marginBottom: 20 }}>
-                  <div
-                    className="stat-card"
-                    style={{
-                      maxWidth: 220, cursor: 'pointer',
-                      border: purRetData.pending_count > 0 ? '1px solid var(--yellow)' : undefined,
-                    }}
-                    onClick={() => setShowPendingRet(true)}
-                  >
+                  <div className="stat-card" style={{ maxWidth: 220, cursor: 'pointer', border: purRetData.pending_count > 0 ? '1px solid var(--yellow)' : undefined }}
+                    onClick={() => setShowPendingRet(true)}>
                     <div className="label">⏳ Pending Returns</div>
-                    <div className="value" style={{ color: purRetData.pending_count > 0 ? 'var(--yellow)' : 'var(--text3)', fontSize: 28 }}>
-                      {purRetData.pending_count}
-                    </div>
+                    <div className="value" style={{ color: purRetData.pending_count > 0 ? 'var(--yellow)' : 'var(--text3)', fontSize: 28 }}>{purRetData.pending_count}</div>
                     <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Click to view items</div>
                   </div>
                 </div>
               )}
-
               <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
                 <table>
-                  <thead>
-                    <tr>
-                      <th>Product</th><th>Barcode</th><th>Qty</th>
-                      <th>Purchase Price</th><th>Tax</th><th>Item Cost</th>
-                      <th>Reason</th><th>Date</th><th>Status</th><th></th>
-                    </tr>
-                  </thead>
+                  <thead><tr><th>Product</th><th>Barcode</th><th>Qty</th><th>Purchase Price</th><th>Tax</th><th>Item Cost</th><th>Reason</th><th>Date</th><th>Status</th><th></th></tr></thead>
                   <tbody>
                     {(purRetData?.returns || []).map((r, i) => (
                       <tr key={i}>
-                        <td style={{ fontWeight: 600, color: 'var(--text)' }}>{r.product_name}</td>
+                        <td style={{ fontWeight: 600 }}>{r.product_name}</td>
                         <td><span style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{r.product_barcode}</span></td>
                         <td><span className="badge badge-red">{r.quantity}</span></td>
                         <td style={{ fontFamily: 'var(--mono)' }}>{fmt(r.purchase_price)}</td>
@@ -596,19 +664,11 @@ export default function Reports() {
                         <td style={{ fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{fmt(r.item_cost)}</td>
                         <td style={{ color: 'var(--text3)', fontSize: 13 }}>{r.reason || '—'}</td>
                         <td style={{ fontSize: 12, color: 'var(--text3)' }}>{new Date(r.date).toLocaleDateString()}</td>
-                        <td>
-                          <span className={`badge ${r.status === 'returned' ? 'badge-green' : 'badge-yellow'}`}>
-                            {r.status === 'returned' ? '✅ Returned' : '⏳ Pending'}
-                          </span>
-                        </td>
+                        <td><span className={`badge ${r.status === 'returned' ? 'badge-green' : 'badge-yellow'}`}>{r.status === 'returned' ? '✅ Returned' : '⏳ Pending'}</span></td>
                         <td>
                           {r.status === 'pending' && (
-                            <button
-                              className="btn btn-sm"
-                              style={{ color: 'var(--green)', borderColor: 'var(--green)', background: 'var(--green-dim)', fontSize: 12 }}
-                              onClick={() => handleMarkReturned(r.id)}
-                              disabled={markingId === r.id}
-                            >
+                            <button className="btn btn-sm" style={{ color: 'var(--green)', borderColor: 'var(--green)', background: 'var(--green-dim)', fontSize: 12 }}
+                              onClick={() => handleMarkReturned(r.id)} disabled={markingId === r.id}>
                               {markingId === r.id ? '…' : '✅ Product Returned'}
                             </button>
                           )}
@@ -624,67 +684,46 @@ export default function Reports() {
             </>
           )}
 
-          {/* ── Purchase Report — only Paid/Not Paid cards ── */}
+          {/* ── Purchase Report ── */}
           {tab === 'purchase' && (
             <>
-              {purData && purData.bills.length > 0 && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20, maxWidth: 500 }}>
+              {/* Not Paid card — always visible when data loaded, no Paid card */}
+              {purData && (
+                <div style={{ marginBottom: 20 }}>
                   <div
                     className="stat-card"
-                    style={{ cursor: 'pointer', border: '1px solid var(--green)' }}
-                    onClick={() => setPurListModal({
-                      bills: purData.bills.filter(b => b.is_paid),
-                      title: '✅ Paid Purchases',
-                    })}
-                  >
-                    <div className="label">✅ Paid</div>
-                    <div className="value" style={{ color: 'var(--green)' }}>
-                      {purData.bills.filter(b => b.is_paid).length}
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Click to view</div>
-                  </div>
-                  <div
-                    className="stat-card"
-                    style={{ cursor: 'pointer', border: '1px solid var(--yellow)' }}
-                    onClick={() => setPurListModal({
-                      bills: purData.bills.filter(b => !b.is_paid),
-                      title: '⏳ Not Paid Purchases',
-                    })}
+                    style={{ maxWidth: 220, cursor: 'pointer', border: '1px solid var(--yellow)' }}
+                    onClick={() => setPurListModal({ bills: (purData.bills || []).filter(b => !b.is_paid), title: '⏳ Not Paid Purchases' })}
                   >
                     <div className="label">⏳ Not Paid</div>
                     <div className="value" style={{ color: 'var(--yellow)' }}>
-                      {purData.bills.filter(b => !b.is_paid).length}
+                      {(purData.bills || []).filter(b => !b.is_paid).length}
                     </div>
-                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Click to view</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Click to view bills</div>
                   </div>
                 </div>
               )}
-
               <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
                 <table>
                   <thead>
-                    <tr>
-                      <th>PO Number</th><th>Vendor</th><th>Date</th>
-                      <th>Items</th><th>Purchase Value</th><th>Tax</th>
-                      <th>Total Value</th><th>Payment</th>
-                      <th style={{ textAlign: 'right' }}>Actions</th>
-                    </tr>
+                    <tr><th>PO Number</th><th>Vendor</th><th>Date</th><th>Items</th><th>Purchase Value</th><th>Tax %</th><th>Tax (₹)</th><th>Total Value</th><th>Payment</th><th style={{ textAlign: 'right' }}>Actions</th></tr>
                   </thead>
                   <tbody>
                     {(purData?.bills || []).map((b, i) => (
                       <tr key={i} style={{ cursor: 'pointer' }} onClick={() => setDetailBillId(b.id)}>
                         <td><span className="badge badge-orange" style={{ fontFamily: 'var(--mono)' }}>{b.purchase_number}</span></td>
-                        <td style={{ fontWeight: 600, color: 'var(--text)' }}>{b.vendor_name}</td>
+                        <td style={{ fontWeight: 600 }}>{b.vendor_name}</td>
                         <td style={{ fontSize: 12, color: 'var(--text3)' }}>{new Date(b.date).toLocaleDateString()}</td>
                         <td><span className="badge badge-blue">{b.item_count}</span></td>
                         <td style={{ fontFamily: 'var(--mono)' }}>{fmt(b.total_purchase_price)}</td>
+                        <td style={{ fontFamily: 'var(--mono)', color: 'var(--text3)' }}>
+                          {b.total_purchase_price > 0
+                            ? `${((b.total_tax / b.total_purchase_price) * 100).toFixed(1)}%`
+                            : '—'}
+                        </td>
                         <td style={{ fontFamily: 'var(--mono)', color: 'var(--text3)' }}>{fmt(b.total_tax)}</td>
                         <td style={{ fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{fmt(b.total_value)}</td>
-                        <td>
-                          <span className={`badge ${b.is_paid ? 'badge-green' : 'badge-yellow'}`}>
-                            {b.is_paid ? '✅ Paid' : '⏳ Not Paid'}
-                          </span>
-                        </td>
+                        <td><span className={`badge ${b.is_paid ? 'badge-green' : 'badge-yellow'}`}>{b.is_paid ? '✅ Paid' : '⏳ Not Paid'}</span></td>
                         <td onClick={e => e.stopPropagation()}>
                           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                             <button className="btn btn-secondary btn-sm" onClick={() => setDetailBillId(b.id)}>🔍 View</button>
@@ -695,10 +734,82 @@ export default function Reports() {
                   </tbody>
                 </table>
                 {(!purData || purData.bills.length === 0) && (
-                  <div className="empty-state">
-                    <div className="icon">📦</div>
-                    No purchases. Use Filter to search by date.
-                  </div>
+                  <div className="empty-state"><div className="icon">📦</div>No purchases. Use Filter to search by date.</div>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* ── Sales Tax Report ── */}
+          {tab === 'salestax' && (
+            <>
+              {salesTaxData && salesTaxData.bills.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 20 }}>
+                  <div className="stat-card"><div className="label">Bill Total</div><div className="value" style={{ color: 'var(--accent)' }}>{fmt(salesTaxData.grand_bill_total)}</div></div>
+                  <div className="stat-card"><div className="label">Taxable Amount</div><div className="value" style={{ color: 'var(--blue)' }}>{fmt(salesTaxData.grand_taxable)}</div></div>
+                  <div className="stat-card"><div className="label">Total CGST</div><div className="value" style={{ color: 'var(--green)' }}>{fmt(salesTaxData.grand_cgst)}</div></div>
+                  <div className="stat-card"><div className="label">Total SGST</div><div className="value" style={{ color: 'var(--yellow)' }}>{fmt(salesTaxData.grand_sgst)}</div></div>
+                </div>
+              )}
+              <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                <table>
+                  <thead>
+                    <tr><th>Bill No</th><th>Date</th><th>Bill Amount</th><th>Taxable Amount</th><th>CGST</th><th>SGST</th><th>Total Tax</th></tr>
+                  </thead>
+                  <tbody>
+                    {(salesTaxData?.bills || []).map((b, i) => (
+                      <tr key={i}>
+                        <td style={{ fontWeight: 600, fontFamily: 'var(--mono)' }}>{b.bill_number}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text3)' }}>{new Date(b.date).toLocaleDateString()}</td>
+                        <td style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{fmt(b.total_amount)}</td>
+                        <td style={{ fontFamily: 'var(--mono)' }}>{fmt(b.taxable_amount)}</td>
+                        <td style={{ fontFamily: 'var(--mono)', color: 'var(--green)' }}>{fmt(b.cgst)}</td>
+                        <td style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{fmt(b.sgst)}</td>
+                        <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--accent)' }}>{fmt(b.total_tax)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {(!salesTaxData || salesTaxData.bills.length === 0) && (
+                  <div className="empty-state"><div className="icon">🧾</div>No sales tax data. Use Filter to search by date.</div>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* ── Purchase Tax Report ── */}
+          {tab === 'purtax' && (
+            <>
+              {purTaxData && purTaxData.bills.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 20 }}>
+                  <div className="stat-card"><div className="label">Taxable Amount</div><div className="value" style={{ color: 'var(--accent)' }}>{fmt(purTaxData.grand_taxable)}</div></div>
+                  <div className="stat-card"><div className="label">Total CGST</div><div className="value" style={{ color: 'var(--green)' }}>{fmt(purTaxData.grand_cgst)}</div></div>
+                  <div className="stat-card"><div className="label">Total SGST</div><div className="value" style={{ color: 'var(--yellow)' }}>{fmt(purTaxData.grand_sgst)}</div></div>
+                  <div className="stat-card"><div className="label">Grand Total</div><div className="value" style={{ color: 'var(--blue)' }}>{fmt(purTaxData.grand_total)}</div></div>
+                </div>
+              )}
+              <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                <table>
+                  <thead>
+                    <tr><th>PO Number</th><th>Vendor</th><th>Date</th><th>Taxable Amount</th><th>CGST</th><th>SGST</th><th>Total Tax</th><th>Total Amount</th></tr>
+                  </thead>
+                  <tbody>
+                    {(purTaxData?.bills || []).map((b, i) => (
+                      <tr key={i}>
+                        <td><span className="badge badge-orange" style={{ fontFamily: 'var(--mono)' }}>{b.purchase_number}</span></td>
+                        <td style={{ fontWeight: 600 }}>{b.vendor_name}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text3)' }}>{new Date(b.date).toLocaleDateString()}</td>
+                        <td style={{ fontFamily: 'var(--mono)' }}>{fmt(b.taxable_amount)}</td>
+                        <td style={{ fontFamily: 'var(--mono)', color: 'var(--green)' }}>{fmt(b.cgst)}</td>
+                        <td style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{fmt(b.sgst)}</td>
+                        <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--accent)' }}>{fmt(b.total_tax)}</td>
+                        <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--blue)' }}>{fmt(b.total_amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {(!purTaxData || purTaxData.bills.length === 0) && (
+                  <div className="empty-state"><div className="icon">📋</div>No purchase tax data. Use Filter to search by date.</div>
                 )}
               </div>
             </>
@@ -707,17 +818,16 @@ export default function Reports() {
       )}
 
       {/* Modals */}
-      {showPrintModal  && <PrintModal title="Print Sale Report"     onClose={() => setShowPrintModal(false)} onPrint={handleSalePrint} />}
-      {showPurPrint    && <PrintModal title="Print Purchase Report" onClose={() => setShowPurPrint(false)}   onPrint={handlePurchasePrint} />}
-      {detailBillId    && <PurchaseBillDetailModal billId={detailBillId} onClose={() => setDetailBillId(null)} />}
-      {showPendingRet  && purRetData && <PendingReturnsModal returns={purRetData.returns} onClose={() => setShowPendingRet(false)} />}
-      {purListModal    && (
-        <PurchaseBillsListModal
-          bills={purListModal.bills}
-          title={purListModal.title}
+      {showPrintModal    && <PrintModal title="Print Sale Report"         onClose={() => setShowPrintModal(false)}    onPrint={handleSalePrint} />}
+      {showPurPrint      && <PrintModal title="Print Purchase Report"     onClose={() => setShowPurPrint(false)}      onPrint={handlePurchasePrint} />}
+      {showSalesTaxPrint && <PrintModal title="Print Sales Tax Report"    onClose={() => setShowSalesTaxPrint(false)} onPrint={handleSalesTaxPrint} />}
+      {showPurTaxPrint   && <PrintModal title="Print Purchase Tax Report" onClose={() => setShowPurTaxPrint(false)}   onPrint={handlePurTaxPrint} />}
+      {detailBillId      && <PurchaseBillDetailModal billId={detailBillId} onClose={() => setDetailBillId(null)} />}
+      {showPendingRet    && purRetData && <PendingReturnsModal returns={purRetData.returns} onClose={() => setShowPendingRet(false)} />}
+      {purListModal      && (
+        <PurchaseBillsListModal bills={purListModal.bills} title={purListModal.title}
           onClose={() => setPurListModal(null)}
-          onViewDetail={id => { setPurListModal(null); setDetailBillId(id); }}
-        />
+          onViewDetail={id => { setPurListModal(null); setDetailBillId(id); }} />
       )}
     </div>
   );
