@@ -7,6 +7,7 @@ import {
   getDirectMasters, createDirectSale
 } from '../services/api';
 import PrintBill from '../components/PrintBill';
+import { usePermissions } from '../context/PermissionContext';
 
 const fmt = n => `₹${parseFloat(n || 0).toFixed(2)}`;
 
@@ -60,60 +61,25 @@ function SearchBar({ onAdd }) {
 
   const handleKeyDown = async e => {
     const cur = resultsRef.current;
-
-    // Arrow navigation
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setHighlighted(h => Math.min(h + 1, cur.length - 1));
-      return;
-    }
-    if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setHighlighted(h => Math.max(h - 1, 0));
-      return;
-    }
-
-    if (e.key === 'Escape') {
-      setResults([]); setQuery(''); setHighlighted(-1);
-      clearTimeout(debounceRef.current);
-      return;
-    }
-
+    if (e.key === 'ArrowDown') { e.preventDefault(); setHighlighted(h => Math.min(h + 1, cur.length - 1)); return; }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); setHighlighted(h => Math.max(h - 1, 0)); return; }
+    if (e.key === 'Escape') { setResults([]); setQuery(''); setHighlighted(-1); clearTimeout(debounceRef.current); return; }
     if (e.key === 'Enter') {
-      e.preventDefault();
-      clearTimeout(debounceRef.current);
-
-      // If a row is highlighted via arrow keys, select it
-      if (highlighted >= 0 && highlighted < cur.length) {
-        selectProduct(cur[highlighted]);
-        return;
-      }
-
+      e.preventDefault(); clearTimeout(debounceRef.current);
+      if (highlighted >= 0 && highlighted < cur.length) { selectProduct(cur[highlighted]); return; }
       if (cur.length > 0) {
-        const allSameProduct = cur.every(r => r.id === cur[0].id);
-        if (cur.length === 1) {
-          selectProduct(cur[0]);
-        } else if (allSameProduct) {
-          // Multiple batches — keep dropdown open for manual selection
-        } else {
-          selectProduct(cur[0]);
-        }
+        const allSame = cur.every(r => r.id === cur[0].id);
+        if (cur.length === 1) { selectProduct(cur[0]); }
+        else if (!allSame)    { selectProduct(cur[0]); }
         return;
       }
-
-      // Barcode lookup
       const q = query.trim(); if (!q) return;
       try {
         const { data } = await getProductByBarcode(q);
         if (Array.isArray(data) && data.length > 0) {
-          if (data.length === 1) {
-            selectProduct(data[0]);
-          } else {
-            setResults(data); setHighlighted(-1);
-          }
-        } else {
-          toast.error('Product not found');
-        }
+          if (data.length === 1) { selectProduct(data[0]); }
+          else { setResults(data); setHighlighted(-1); }
+        } else { toast.error('Product not found'); }
       } catch { toast.error('Product not found'); }
     }
   };
@@ -130,7 +96,7 @@ function SearchBar({ onAdd }) {
         <div style={{
           position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200,
           background: 'var(--surface)', border: '1px solid var(--border)',
-          borderRadius: 'var(--radius)', marginTop: 4, overflow: 'hidden', boxShadow: 'var(--shadow)'
+          borderRadius: 'var(--radius)', marginTop: 4, overflow: 'hidden', boxShadow: 'var(--shadow)',
         }}>
           {results.length > 1 && results.every(r => r.id === results[0].id) && (
             <div style={{ padding: '8px 14px', background: 'var(--accent-dim)', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--accent)', fontWeight: 600 }}>
@@ -138,20 +104,12 @@ function SearchBar({ onAdd }) {
             </div>
           )}
           <table>
-            <thead>
-              <tr><th>Barcode</th><th>Product</th><th>Price</th><th>Stock</th></tr>
-            </thead>
+            <thead><tr><th>Barcode</th><th>Product</th><th>Price</th><th>Stock</th></tr></thead>
             <tbody>
               {results.map((p, i) => (
-                <tr key={`${p.id}-${p.batch_id || i}`}
-                  onClick={() => selectProduct(p)}
-                  style={{
-                    cursor: 'pointer',
-                    background: highlighted === i ? 'var(--accent-dim)' : undefined,
-                    outline: highlighted === i ? `2px solid var(--accent)` : undefined,
-                  }}
-                  onMouseEnter={() => setHighlighted(i)}
-                  onMouseLeave={() => setHighlighted(-1)}>
+                <tr key={`${p.id}-${p.batch_id || i}`} onClick={() => selectProduct(p)}
+                  style={{ cursor: 'pointer', background: highlighted === i ? 'var(--accent-dim)' : undefined, outline: highlighted === i ? `2px solid var(--accent)` : undefined }}
+                  onMouseEnter={() => setHighlighted(i)} onMouseLeave={() => setHighlighted(-1)}>
                   <td><span style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{p.barcode}</span></td>
                   <td>
                     <div style={{ fontWeight: 600, color: 'var(--text)' }}>{p.name}</div>
@@ -161,10 +119,7 @@ function SearchBar({ onAdd }) {
                   <td>
                     {parseFloat(p.stock_quantity) <= 0
                       ? <span className="badge badge-red">Out of Stock</span>
-                      : <span className="badge badge-green">
-                          {parseFloat(p.stock_quantity).toFixed(p.selling_unit === 'kg' ? 3 : 0)} {p.selling_unit || 'nos'}
-                        </span>
-                    }
+                      : <span className="badge badge-green">{parseFloat(p.stock_quantity).toFixed(p.selling_unit === 'kg' ? 3 : 0)} {p.selling_unit || 'nos'}</span>}
                   </td>
                 </tr>
               ))}
@@ -180,78 +135,66 @@ function SearchBar({ onAdd }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BillTable
+// BillTable — no internal total (shown in sticky footer)
 // ─────────────────────────────────────────────────────────────────────────────
 function BillTable({ items, onQtyChange, onRemove }) {
-  const total = items.reduce((s, i) => s + i.price * (parseFloat(i.qty) || 0), 0);
-
   if (!items.length) return (
-    <div className="empty-state" style={{ padding: '40px 0' }}>
+    <div className="empty-state" style={{ padding: '60px 0' }}>
       <div className="icon">🛒</div>
       <div>No items added. Scan or search a product above.</div>
     </div>
   );
 
   return (
-    <div>
-      <table>
-        <thead>
-          <tr><th>#</th><th>Product</th><th>Price</th><th>Qty / Weight</th><th>Subtotal</th><th></th></tr>
-        </thead>
-        <tbody>
-          {items.map((item, i) => (
-            <tr key={item._key || item.id}>
-              <td style={{ color: 'var(--text3)' }}>{i + 1}</td>
-              <td>
-                <div style={{ fontWeight: 600, color: 'var(--text)' }}>{item.name}</div>
-                <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: 'var(--mono)' }}>{item.barcode}</div>
-                <div style={{ fontSize: 11, marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span className={`badge ${item.selling_unit === 'kg' ? 'badge-blue' : item.selling_unit === 'case' ? 'badge-purple' : 'badge-orange'}`}>
-                    per {item.selling_unit}
-                  </span>
-                  {item.multi_batch && <span className="badge badge-orange">MRP ₹{item.batch_mrp}</span>}
-                  <span style={{ color: 'var(--text3)' }}>
-                    stock: {parseFloat(item.stock).toFixed(item.selling_unit === 'kg' ? 3 : 0)} {item.selling_unit}
-                  </span>
+    <table>
+      <thead>
+        <tr><th>#</th><th>Product</th><th>Price</th><th>Qty / Weight</th><th>Subtotal</th><th></th></tr>
+      </thead>
+      <tbody>
+        {items.map((item, i) => (
+          <tr key={item._key || item.id}>
+            <td style={{ color: 'var(--text3)' }}>{i + 1}</td>
+            <td>
+              <div style={{ fontWeight: 600, color: 'var(--text)' }}>{item.name}</div>
+              <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: 'var(--mono)' }}>{item.barcode}</div>
+              <div style={{ fontSize: 11, marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span className={`badge ${item.selling_unit === 'kg' ? 'badge-blue' : item.selling_unit === 'case' ? 'badge-purple' : 'badge-orange'}`}>
+                  per {item.selling_unit}
+                </span>
+                {item.multi_batch && <span className="badge badge-orange">MRP ₹{item.batch_mrp}</span>}
+                <span style={{ color: 'var(--text3)' }}>stock: {parseFloat(item.stock).toFixed(item.selling_unit === 'kg' ? 3 : 0)} {item.selling_unit}</span>
+              </div>
+            </td>
+            <td style={{ color: 'var(--accent)', fontWeight: 600 }}>{fmt(item.price)}</td>
+            <td>
+              {item.selling_unit === 'kg' ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input type="text" inputMode="decimal" value={item.qty}
+                    onChange={e => onQtyChange(item._key, e.target.value, true)}
+                    onBlur={e => {
+                      const v = parseFloat(e.target.value);
+                      if (!v || v <= 0) onQtyChange(item._key, '1', true);
+                      else if (v > item.stock) { toast.error('Not enough stock'); onQtyChange(item._key, String(item.stock), true); }
+                      else onQtyChange(item._key, String(v), true);
+                    }}
+                    style={{ width: 90, textAlign: 'right', fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 14, padding: '4px 8px' }} />
+                  <span style={{ color: 'var(--text3)', fontSize: 13, minWidth: 20 }}>kg</span>
                 </div>
-              </td>
-              <td style={{ color: 'var(--accent)', fontWeight: 600 }}>{fmt(item.price)}</td>
-              <td>
-                {item.selling_unit === 'kg' ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <input type="text" inputMode="decimal" value={item.qty}
-                      onChange={e => onQtyChange(item._key, e.target.value, true)}
-                      onBlur={e => {
-                        const v = parseFloat(e.target.value);
-                        if (!v || v <= 0) onQtyChange(item._key, '1', true);
-                        else if (v > item.stock) { toast.error('Not enough stock'); onQtyChange(item._key, String(item.stock), true); }
-                        else onQtyChange(item._key, String(v), true);
-                      }}
-                      style={{ width: 90, textAlign: 'right', fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 14, padding: '4px 8px' }} />
-                    <span style={{ color: 'var(--text3)', fontSize: 13, minWidth: 20 }}>kg</span>
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <button className="btn btn-secondary btn-sm" onClick={() => onQtyChange(item._key, -1)} style={{ padding: '2px 8px' }}>−</button>
-                    <span style={{ fontFamily: 'var(--mono)', minWidth: 28, textAlign: 'center', fontWeight: 700 }}>{item.qty}</span>
-                    <button className="btn btn-secondary btn-sm" onClick={() => onQtyChange(item._key, 1)} style={{ padding: '2px 8px' }}>+</button>
-                    <span style={{ color: 'var(--text3)', fontSize: 12 }}>{item.selling_unit}</span>
-                  </div>
-                )}
-              </td>
-              <td style={{ fontWeight: 700, color: 'var(--text)' }}>{fmt(item.price * (parseFloat(item.qty) || 0))}</td>
-              <td><button className="btn btn-danger btn-sm" onClick={() => onRemove(item._key)}>✕</button></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '16px 14px', borderTop: '2px solid var(--accent)', marginTop: 8 }}>
-        <div>
-          <span style={{ color: 'var(--text3)', fontSize: 14, marginRight: 16 }}>TOTAL</span>
-          <span style={{ fontSize: 28, fontWeight: 800, fontFamily: 'var(--mono)', color: 'var(--accent)' }}>{fmt(total)}</span>
-        </div>
-      </div>
-    </div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <button className="btn btn-secondary btn-sm" onClick={() => onQtyChange(item._key, -1)} style={{ padding: '2px 8px' }}>−</button>
+                  <span style={{ fontFamily: 'var(--mono)', minWidth: 28, textAlign: 'center', fontWeight: 700 }}>{item.qty}</span>
+                  <button className="btn btn-secondary btn-sm" onClick={() => onQtyChange(item._key, 1)} style={{ padding: '2px 8px' }}>+</button>
+                  <span style={{ color: 'var(--text3)', fontSize: 12 }}>{item.selling_unit}</span>
+                </div>
+              )}
+            </td>
+            <td style={{ fontWeight: 700, color: 'var(--text)' }}>{fmt(item.price * (parseFloat(item.qty) || 0))}</td>
+            <td><button className="btn btn-danger btn-sm" onClick={() => onRemove(item._key)}>✕</button></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -263,29 +206,15 @@ function PaymentModal({ total, onClose, onConfirm }) {
   const [creditAmt,  setCreditAmt]  = useState('');
   const [creditType, setCreditType] = useState('card');
 
-  const handleCashChange = e => {
-    const c = e.target.value; setCashAmt(c);
-    const rem = total - (parseFloat(c) || 0);
-    setCreditAmt(rem > 0 ? rem.toFixed(2) : '0.00');
-  };
-  const handleCreditChange = e => {
-    const k = e.target.value; setCreditAmt(k);
-    const rem = total - (parseFloat(k) || 0);
-    setCashAmt(rem > 0 ? rem.toFixed(2) : '0.00');
-  };
-
+  const handleCashChange = e => { const c = e.target.value; setCashAmt(c); const rem = total - (parseFloat(c)||0); setCreditAmt(rem > 0 ? rem.toFixed(2) : '0.00'); };
+  const handleCreditChange = e => { const k = e.target.value; setCreditAmt(k); const rem = total - (parseFloat(k)||0); setCashAmt(rem > 0 ? rem.toFixed(2) : '0.00'); };
   const cashVal   = parseFloat(cashAmt)   || 0;
   const creditVal = parseFloat(creditAmt) || 0;
   const splitOk   = Math.abs(cashVal + creditVal - total) < 0.01;
 
   const handleSplit = () => {
     if (!splitOk) { toast.error(`Amounts must sum to ${fmt(total)}`); return; }
-    onConfirm(
-      creditType === 'card' ? 'cash_card' : 'cash_upi',
-      cashVal,
-      creditType === 'card' ? creditVal : 0,
-      creditType === 'upi'  ? creditVal : 0
-    );
+    onConfirm(creditType === 'card' ? 'cash_card' : 'cash_upi', cashVal, creditType === 'card' ? creditVal : 0, creditType === 'upi' ? creditVal : 0);
   };
 
   return (
@@ -298,12 +227,11 @@ function PaymentModal({ total, onClose, onConfirm }) {
         <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text3)', marginBottom: 8 }}>Full Payment</p>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 24 }}>
           {[
-            { label: '💵 Cash', type: 'cash', rgb: '34,197,94', color: 'var(--green)' },
+            { label: '💵 Cash', type: 'cash', rgb: '34,197,94',  color: 'var(--green)' },
             { label: '💳 Card', type: 'card', rgb: '59,130,246', color: 'var(--blue)' },
             { label: '📱 UPI',  type: 'upi',  rgb: '168,85,247', color: 'var(--purple)' },
           ].map(p => (
-            <button key={p.type}
-              onClick={() => onConfirm(p.type, p.type==='cash'?total:0, p.type==='card'?total:0, p.type==='upi'?total:0)}
+            <button key={p.type} onClick={() => onConfirm(p.type, p.type==='cash'?total:0, p.type==='card'?total:0, p.type==='upi'?total:0)}
               className="btn" style={{ background: `rgba(${p.rgb},0.15)`, color: p.color, border: `1px solid ${p.color}`, justifyContent: 'center', padding: 16, fontSize: 15 }}>
               {p.label}
             </button>
@@ -359,7 +287,6 @@ function EditPaymentModal({ bill, onClose, onSaved }) {
 
   const handleCashChange   = e => { const c = e.target.value; setCashAmt(c);   const rem = total - (parseFloat(c)||0); setCreditAmt(rem > 0 ? rem.toFixed(2) : '0.00'); };
   const handleCreditChange = e => { const k = e.target.value; setCreditAmt(k); const rem = total - (parseFloat(k)||0); setCashAmt(rem   > 0 ? rem.toFixed(2) : '0.00'); };
-
   const cashVal   = parseFloat(cashAmt)   || 0;
   const creditVal = parseFloat(creditAmt) || 0;
   const splitOk   = Math.abs(cashVal + creditVal - total) < 0.01;
@@ -454,9 +381,10 @@ function EditPaymentModal({ bill, onClose, onSaved }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ViewBillsModal
+// ViewBillsModal — with permission checks on Edit/Delete
 // ─────────────────────────────────────────────────────────────────────────────
 function ViewBillsModal({ onClose }) {
+  const { isAdmin, can } = usePermissions();
   const [bills,       setBills]       = useState([]);
   const [loading,     setLoading]     = useState(true);
   const [search,      setSearch]      = useState('');
@@ -522,17 +450,29 @@ function ViewBillsModal({ onClose }) {
                     <td>
                       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                         <button className="btn btn-secondary btn-sm" onClick={() => openBill(b)}>🖨️ View</button>
-                        <button className="btn btn-secondary btn-sm" onClick={() => setEditingBill(b)} style={{ color: 'var(--blue)', borderColor: 'var(--blue)' }}>✏️ Edit</button>
-                        <button className="btn btn-danger btn-sm" onClick={() => handleDelete(b)} disabled={deleting === b.id}>
-                          {deleting === b.id ? '…' : '🗑️'}
-                        </button>
+                        {/* Edit — permission gated */}
+                        {(isAdmin || can('can_edit_bill')) && (
+                          <button className="btn btn-secondary btn-sm" onClick={() => setEditingBill(b)}
+                            style={{ color: 'var(--blue)', borderColor: 'var(--blue)' }}>✏️ Edit</button>
+                        )}
+                        {/* Delete — permission gated */}
+                        {(isAdmin || can('can_delete_bill')) && (
+                          <button className="btn btn-danger btn-sm" onClick={() => handleDelete(b)} disabled={deleting === b.id}>
+                            {deleting === b.id ? '…' : '🗑️'}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {filtered.length === 0 && <div className="empty-state"><div className="icon">📄</div>{search ? `No bills matching "${search}"` : 'No bills yet'}</div>}
+            {filtered.length === 0 && (
+              <div className="empty-state">
+                <div className="icon">📄</div>
+                {search ? `No bills matching "${search}"` : 'No bills yet'}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -540,8 +480,6 @@ function ViewBillsModal({ onClose }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DirectSaleModal
 // ─────────────────────────────────────────────────────────────────────────────
 function DirectSaleModal({ onClose }) {
   const [masters,    setMasters]    = useState([]);
@@ -554,6 +492,21 @@ function DirectSaleModal({ onClose }) {
   const [loading,    setLoading]    = useState(false);
 
   useEffect(() => { getDirectMasters().then(r => setMasters(r.data.filter(m => m.is_active))); }, []);
+
+  // Keyboard shortcuts inside Direct Sale modal
+  useEffect(() => {
+    const handleKey = e => {
+      if (e.key === 'Escape') { onClose(); return; }
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      if (e.key === 'F1') { e.preventDefault(); setPayType('cash'); }
+      if (e.key === 'F2') { e.preventDefault(); setPayType('card'); }
+      if (e.key === 'F3') { e.preventDefault(); setPayType('upi'); }
+      if (e.key === 'F4') { e.preventDefault(); setPayType('split'); }
+      if (e.key === 'Enter') { e.preventDefault(); handleConfirm(); }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [selectedId, price, payType, cashAmt, creditAmt, creditType]);
 
   const total     = parseFloat(price) || 0;
   const cashVal   = parseFloat(cashAmt)   || 0;
@@ -612,15 +565,17 @@ function DirectSaleModal({ onClose }) {
         {price && total > 0 && (
           <>
             <div className="form-group">
-              <label>Payment Method</label>
+              <label>Payment Method <span style={{ fontWeight: 400, fontSize: 11, color: 'var(--text3)' }}>(F1 Cash · F2 Card · F3 UPI · F4 Split)</span></label>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 4 }}>
                 {[
-                  { v: 'cash',  label: '💵 Cash', color: 'var(--green)' },
-                  { v: 'card',  label: '💳 Card', color: 'var(--blue)' },
-                  { v: 'upi',   label: '📱 UPI',  color: 'var(--purple)' },
-                  { v: 'split', label: '💵+💳 Cash+Credit', color: 'var(--yellow)' },
+                  { v: 'cash',  label: '💵 Cash',           color: 'var(--green)',  fkey: 'F1' },
+                  { v: 'card',  label: '💳 Card',           color: 'var(--blue)',   fkey: 'F2' },
+                  { v: 'upi',   label: '📱 UPI',            color: 'var(--purple)', fkey: 'F3' },
+                  { v: 'split', label: '💵+💳 Cash+Credit', color: 'var(--yellow)', fkey: 'F4' },
                 ].map(t => (
-                  <button key={t.v} onClick={() => setPayType(t.v)} className="btn" style={{ justifyContent: 'center', padding: '10px', background: payType === t.v ? 'rgba(255,255,255,0.08)' : 'var(--bg3)', color: t.color, border: `1px solid ${payType === t.v ? t.color : 'var(--border)'}`, fontWeight: payType === t.v ? 700 : 400 }}>{t.label}</button>
+                  <button key={t.v} onClick={() => setPayType(t.v)} className="btn" style={{ justifyContent: 'center', padding: '10px', background: payType === t.v ? 'rgba(255,255,255,0.08)' : 'var(--bg3)', color: t.color, border: `1px solid ${payType === t.v ? t.color : 'var(--border)'}`, fontWeight: payType === t.v ? 700 : 400 }}>
+                    {t.label} <span style={{ fontSize: 10, opacity: 0.6, marginLeft: 4 }}>{t.fkey}</span>
+                  </button>
                 ))}
               </div>
             </div>
@@ -660,11 +615,10 @@ function DirectSaleModal({ onClose }) {
           </>
         )}
         <div style={{ display: 'flex', gap: 10 }}>
-          <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }}
-            onClick={handleConfirm} disabled={loading || !selectedId || !price}>
-            {loading ? 'Recording…' : '✓ Confirm Sale'}
+          <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }} onClick={handleConfirm} disabled={loading || !selectedId || !price}>
+            {loading ? 'Recording…' : '✓ Confirm Sale (Enter)'}
           </button>
-          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-secondary" onClick={onClose}>Cancel (Esc)</button>
         </div>
       </div>
     </div>
@@ -740,8 +694,7 @@ function InternalSaleModal({ onClose }) {
         <p style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 20 }}>Transfer stock internally — reduces stock without recording a sale.</p>
         <div className="form-group" style={{ position: 'relative' }}>
           <label>Scan / Search Product</label>
-          <input autoFocus value={query} onChange={handleChange} onKeyDown={handleKeyDown}
-            placeholder="Scan barcode or type product name…" />
+          <input autoFocus value={query} onChange={handleChange} onKeyDown={handleKeyDown} placeholder="Scan barcode or type product name…" />
           {searching && <div style={{ position: 'absolute', right: 14, top: 34, fontSize: 12, color: 'var(--text3)' }}>searching…</div>}
           {results.length > 0 && (
             <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', marginTop: 2, overflow: 'hidden', boxShadow: 'var(--shadow)' }}>
@@ -814,8 +767,7 @@ function InternalSaleModal({ onClose }) {
           </div>
         )}
         <div style={{ display: 'flex', gap: 10 }}>
-          <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }}
-            onClick={handleConfirm} disabled={loading || !product || !destId}>
+          <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }} onClick={handleConfirm} disabled={loading || !product || !destId}>
             {loading ? 'Transferring…' : '✓ Confirm Transfer'}
           </button>
           <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
@@ -861,8 +813,7 @@ function ReturnModal({ onClose }) {
         <h2>↩️ Process Return</h2>
         <div className="form-group">
           <label>Scan / Enter Barcode</label>
-          <input autoFocus value={query} onChange={e => setQuery(e.target.value)}
-            onKeyDown={handleScan} placeholder="Scan barcode and press Enter…" />
+          <input autoFocus value={query} onChange={e => setQuery(e.target.value)} onKeyDown={handleScan} placeholder="Scan barcode and press Enter…" />
         </div>
         {product && (
           <div style={{ background: 'var(--bg3)', borderRadius: 'var(--radius)', padding: 16, marginBottom: 16 }}>
@@ -887,8 +838,7 @@ function ReturnModal({ onClose }) {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-          <button className="btn btn-primary" onClick={handleReturn}
-            disabled={!product || !returnType || loading} style={{ flex: 1, justifyContent: 'center' }}>
+          <button className="btn btn-primary" onClick={handleReturn} disabled={!product || !returnType || loading} style={{ flex: 1, justifyContent: 'center' }}>
             {loading ? 'Processing…' : 'Process Return'}
           </button>
           <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
@@ -899,9 +849,10 @@ function ReturnModal({ onClose }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Main Sale Page — with function key shortcuts
+// Main Sale Page
 // ─────────────────────────────────────────────────────────────────────────────
 export default function Sale() {
+  const { isAdmin, can } = usePermissions();
   const [items,        setItems]        = useState([]);
   const [showPayment,  setShowPayment]  = useState(false);
   const [showBills,    setShowBills]    = useState(false);
@@ -912,14 +863,20 @@ export default function Sale() {
 
   const total = items.reduce((s, i) => s + i.price * (parseFloat(i.qty) || 0), 0);
 
-  // Function key shortcuts
+  // Function key shortcuts + ESC to close modals
   useEffect(() => {
     const handleKey = e => {
-      // Don't trigger shortcuts when typing in inputs
+      // ESC closes any open modal
+      if (e.key === 'Escape') {
+        if (showPayment)  { setShowPayment(false);  return; }
+        if (showBills)    { setShowBills(false);    return; }
+        if (showReturn)   { setShowReturn(false);   return; }
+        if (showInternal) { setShowInternal(false); return; }
+        if (showDirect)   { setShowDirect(false);   return; }
+        if (printBill)    { setPrintBill(null);     return; }
+      }
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
-      // Also don't trigger if any modal is open
       if (showPayment || showBills || showReturn || showInternal || showDirect || printBill) return;
-
       if (e.key === 'F1') { e.preventDefault(); if (items.length > 0) confirmPayment('cash', total, 0, 0); }
       if (e.key === 'F2') { e.preventDefault(); if (items.length > 0) confirmPayment('card', 0, total, 0); }
       if (e.key === 'F3') { e.preventDefault(); if (items.length > 0) confirmPayment('upi',  0, 0, total); }
@@ -939,7 +896,6 @@ export default function Sale() {
       const existing = prev.find(i => i._key === key);
       const stock    = parseFloat(p.stock_quantity);
       const unit     = p.selling_unit || 'nos';
-
       if (existing) {
         const newQty = parseFloat(existing.qty) + 1;
         if (newQty > stock) { toast.error('Not enough stock'); return prev; }
@@ -988,14 +944,11 @@ export default function Sale() {
       toast.success(`Bill ${data.bill_number} saved!`);
       setItems([]);
       setPrintBill(data);
-    } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to save bill');
-    }
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to save bill'); }
   };
 
   if (printBill) return <PrintBill bill={printBill} onClose={() => setPrintBill(null)} />;
 
-  // Helper to render function key badge inside button
   const Fkey = ({ k }) => (
     <span style={{ fontSize: 10, fontWeight: 700, background: 'rgba(255,255,255,0.2)', borderRadius: 4, padding: '1px 5px', marginLeft: 6, letterSpacing: 0, fontFamily: 'monospace' }}>
       {k}
@@ -1003,10 +956,13 @@ export default function Sale() {
   );
 
   return (
-    <div>
-      <div className="page-header">
+    // Use fixed height layout so payment bar stays at bottom
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 116px)' }}>
+      {/* Page header */}
+      <div className="page-header" style={{ flexShrink: 0 }}>
         <h1>🛒 Sale</h1>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button className="btn btn-secondary" onClick={() => setItems([])}>🔄 Refresh</button>
           <button className="btn btn-secondary" onClick={() => setShowReturn(true)}>
             ↩️ Return <Fkey k="F8" />
           </button>
@@ -1014,52 +970,83 @@ export default function Sale() {
             style={{ color: 'var(--purple)', borderColor: 'var(--purple)' }}>
             🏭 Internal Sale <Fkey k="F7" />
           </button>
-          <button className="btn btn-secondary" onClick={() => setShowDirect(true)}
-            style={{ color: 'var(--green)', borderColor: 'var(--green)' }}>
-            ⚡ Direct Sale <Fkey k="F6" />
-          </button>
+          {(isAdmin || can('can_access_direct_sale')) && (
+            <button className="btn btn-secondary" onClick={() => setShowDirect(true)}
+              style={{ color: 'var(--green)', borderColor: 'var(--green)' }}>
+              ⚡ Direct Sale <Fkey k="F6" />
+            </button>
+          )}
           <button className="btn btn-secondary" onClick={() => setShowBills(true)}>
             📋 View Bills <Fkey k="F5" />
           </button>
-          {items.length > 0 && (
-            <button className="btn btn-primary" onClick={() => setShowPayment(true)}>
-              💳 Pay {fmt(total)}
-            </button>
-          )}
         </div>
       </div>
 
-      <div className="card" style={{ marginBottom: 20 }}>
-        <SearchBar onAdd={addItem} />
-      </div>
+      {/* Main area: search + scrollable items + sticky payment */}
+      <div style={{
+        flex: 1, minHeight: 0,
+        display: 'flex', flexDirection: 'column',
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)',
+        overflow: 'hidden',
+      }}>
 
-      <div className="card">
-        <BillTable items={items} onQtyChange={changeQty} onRemove={removeItem} />
-        {items.length > 0 && (
-          <div style={{ display: 'flex', gap: 12, marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 16, flexWrap: 'wrap' }}>
-            {[
-              { type: 'cash',  label: '💵 Cash',           fkey: 'F1', rgb: '34,197,94',  color: 'var(--green)' },
-              { type: 'card',  label: '💳 Card',           fkey: 'F2', rgb: '59,130,246', color: 'var(--blue)' },
-              { type: 'upi',   label: '📱 UPI',            fkey: 'F3', rgb: '168,85,247', color: 'var(--purple)' },
-              { type: 'split', label: '💵+💳 Cash+Credit', fkey: 'F4', rgb: '234,179,8',  color: 'var(--yellow)' },
-            ].map(p => (
-              <button key={p.type} onClick={() => {
-                if (p.type === 'split') { setShowPayment(true); return; }
-                confirmPayment(p.type, p.type==='cash'?total:0, p.type==='card'?total:0, p.type==='upi'?total:0);
-              }} className="btn" style={{
-                flex: 1, justifyContent: 'center', padding: '12px',
-                background: `rgba(${p.rgb},0.15)`, color: p.color,
-                border: `1px solid ${p.color}`, fontSize: 14, fontWeight: 700,
-                minWidth: 120,
-              }}>
-                {p.label}
-                <span style={{ fontSize: 10, fontWeight: 700, background: 'rgba(255,255,255,0.2)', borderRadius: 4, padding: '1px 5px', marginLeft: 8, letterSpacing: 0, fontFamily: 'monospace' }}>
-                  {p.fkey}
-                </span>
-              </button>
-            ))}
-          </div>
-        )}
+        {/* Search — fixed at top */}
+        <div style={{ padding: 16, borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+          <SearchBar onAdd={addItem} />
+        </div>
+
+        {/* Item list — scrollable */}
+        <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+          <BillTable items={items} onQtyChange={changeQty} onRemove={removeItem} />
+        </div>
+
+        {/* Payment footer — always visible at bottom */}
+        <div style={{
+          flexShrink: 0,
+          borderTop: items.length > 0 ? '2px solid var(--accent)' : '1px solid var(--border)',
+          background: 'var(--bg2)',
+          padding: items.length > 0 ? '12px 16px' : '10px 16px',
+        }}>
+          {items.length > 0 ? (
+            <>
+              {/* Total */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 10 }}>
+                <span style={{ color: 'var(--text3)', fontSize: 14, marginRight: 12 }}>{items.length} item{items.length !== 1 ? 's' : ''}</span>
+                <span style={{ color: 'var(--text3)', fontSize: 14, marginRight: 12 }}>TOTAL</span>
+                <span style={{ fontSize: 26, fontWeight: 800, fontFamily: 'var(--mono)', color: 'var(--accent)' }}>{fmt(total)}</span>
+              </div>
+              {/* Payment buttons */}
+              <div style={{ display: 'flex', gap: 10 }}>
+                {[
+                  { type: 'cash',  label: '💵 Cash',           fkey: 'F1', rgb: '34,197,94',  color: 'var(--green)' },
+                  { type: 'card',  label: '💳 Card',           fkey: 'F2', rgb: '59,130,246', color: 'var(--blue)' },
+                  { type: 'upi',   label: '📱 UPI',            fkey: 'F3', rgb: '168,85,247', color: 'var(--purple)' },
+                  { type: 'split', label: '💵+💳 Cash+Credit', fkey: 'F4', rgb: '234,179,8',  color: 'var(--yellow)' },
+                ].map(p => (
+                  <button key={p.type} onClick={() => {
+                    if (p.type === 'split') { setShowPayment(true); return; }
+                    confirmPayment(p.type, p.type==='cash'?total:0, p.type==='card'?total:0, p.type==='upi'?total:0);
+                  }} className="btn" style={{
+                    flex: 1, justifyContent: 'center', padding: '11px 8px',
+                    background: `rgba(${p.rgb},0.15)`, color: p.color,
+                    border: `1px solid ${p.color}`, fontSize: 14, fontWeight: 700,
+                  }}>
+                    {p.label}
+                    <span style={{ fontSize: 10, fontWeight: 700, background: 'rgba(255,255,255,0.2)', borderRadius: 4, padding: '1px 5px', marginLeft: 8, fontFamily: 'monospace' }}>
+                      {p.fkey}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div style={{ textAlign: 'center', fontSize: 13, color: 'var(--text3)' }}>
+              Add items to start a sale · F5 View Bills · F6 Direct Sale · F7 Internal Sale · F8 Return
+            </div>
+          )}
+        </div>
       </div>
 
       {showPayment  && <PaymentModal total={total} onClose={() => setShowPayment(false)} onConfirm={confirmPayment} />}

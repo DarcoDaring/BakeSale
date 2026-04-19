@@ -6,12 +6,15 @@ import {
   createPurchaseBill, getPurchases, getVendors, createVendor, updateVendor,
   createPurchaseReturn
 } from '../services/api';
-
+import { usePermissions } from '../context/PermissionContext';
 const UNITS = ['nos', 'kg', 'case'];
 const fmt   = n => `₹${parseFloat(n || 0).toFixed(2)}`;
 
-// Block arrow keys on number inputs to prevent accidental increment/decrement
-const noArrow = e => { if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault(); };
+// Remove spinner arrows AND mousewheel from number inputs
+const noArrow = e => {
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
+};
+const noWheel = e => e.target.blur(); // blur on scroll so mousewheel doesn't change value
 
 function VendorMasterModal({ onClose }) {
   const [vendors, setVendors] = useState([]);
@@ -122,7 +125,6 @@ function ProductMasterModal({ onClose }) {
   const [loading,  setLoading]  = useState(true);
   const [search,   setSearch]   = useState('');
   const [modal,    setModal]    = useState(null);
-  const [printing, setPrinting] = useState(null);
 
   const fetchProducts = async () => {
     setLoading(true);
@@ -140,24 +142,69 @@ function ProductMasterModal({ onClose }) {
   };
 
   const printBarcode = p => {
-    setPrinting(p);
-    setTimeout(() => {
-      let el = document.getElementById('barcode-print-area');
-      if (!el) { el = document.createElement('div'); el.id = 'barcode-print-area'; document.body.appendChild(el); }
-      el.innerHTML = `
-        <div style="font-family:monospace;padding:20px;text-align:center;background:#fff;color:#000">
-          <div style="font-size:16px;font-weight:700;margin-bottom:4px">${p.name}</div>
-          <div style="font-size:13px;letter-spacing:4px;margin-bottom:4px">${p.barcode}</div>
-          <div style="font-size:32px;letter-spacing:2px;font-weight:900;margin-bottom:4px">|||||||||||||||</div>
-          <div style="font-size:14px;font-weight:600">${fmt(p.selling_price)}</div>
-        </div>`;
-      const root = document.getElementById('root');
-      root.style.display = 'none';
-      window.print();
-      root.style.display = '';
-      el.innerHTML = '';
-      setPrinting(null);
-    }, 200);
+    const win = window.open('', '_blank', 'width=560,height=520');
+    if (!win) { toast.error('Popup blocked. Please allow popups.'); return; }
+    win.document.write(`<!DOCTYPE html><html><head>
+      <title>Barcode - ${p.name}</title>
+      <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
+      <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: Arial, sans-serif; background: #f5f5f5; }
+        .controls { background: #fff; border-bottom: 1px solid #ddd; padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+        .ctrl-group { display: flex; flex-direction: column; gap: 3px; }
+        .ctrl-group label { font-size: 11px; font-weight: 600; color: #666; text-transform: uppercase; }
+        .ctrl-group input { padding: 5px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; width: 80px; }
+        .btn-print { padding: 8px 20px; background: #2563eb; color: #fff; border: none; border-radius: 4px; font-size: 13px; font-weight: 700; cursor: pointer; margin-top: 2px; }
+        .preview { padding: 20px; display: flex; flex-wrap: wrap; gap: 10px; }
+        .label-box { text-align: center; padding: 8px 10px; border: 1px solid #ccc; background: #fff; border-radius: 4px; }
+        .prod-name { font-size: 11px; font-weight: 700; margin-bottom: 3px; word-break: break-word; }
+        .price { font-size: 12px; font-weight: 800; margin-top: 3px; }
+        @media print { .controls { display: none !important; } body { background: #fff; } .preview { padding: 0; gap: 0; } }
+      </style>
+    </head><body>
+      <div class="controls">
+        <div class="ctrl-group"><label>Copies</label><input type="number" id="copies" value="1" min="1" max="50" oninput="renderLabels()" /></div>
+        <div class="ctrl-group"><label>Top (mm)</label><input type="number" id="topOffset" value="0" min="-50" max="100" oninput="renderLabels()" /></div>
+        <div class="ctrl-group"><label>Left (mm)</label><input type="number" id="leftOffset" value="0" min="-50" max="100" oninput="renderLabels()" /></div>
+        <div class="ctrl-group"><label>Width (mm)</label><input type="number" id="labelWidth" value="50" min="20" max="150" oninput="renderLabels()" /></div>
+        <div class="ctrl-group"><label>BC Height</label><input type="number" id="bcHeight" value="50" min="20" max="120" oninput="renderLabels()" /></div>
+        <button class="btn-print" onclick="window.print()">🖨️ Print</button>
+      </div>
+      <div class="preview" id="preview"></div>
+      <script>
+        const barcode = "${p.barcode}";
+        const name    = ${JSON.stringify(p.name)};
+        const price   = "₹${parseFloat(p.selling_price || 0).toFixed(2)}";
+        function renderLabels() {
+          const copies   = Math.min(50, parseInt(document.getElementById('copies').value)    || 1);
+          const top      = parseInt(document.getElementById('topOffset').value)  || 0;
+          const left     = parseInt(document.getElementById('leftOffset').value) || 0;
+          const width    = parseInt(document.getElementById('labelWidth').value) || 50;
+          const bcHeight = parseInt(document.getElementById('bcHeight').value)   || 50;
+          const preview  = document.getElementById('preview');
+          preview.style.marginTop  = top  + 'mm';
+          preview.style.marginLeft = left + 'mm';
+          preview.innerHTML = '';
+          for (let i = 0; i < copies; i++) {
+            const box = document.createElement('div');
+            box.className = 'label-box';
+            box.style.width = width + 'mm';
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('id', 'bc' + i);
+            box.innerHTML = '<div class="prod-name">' + name + '</div>';
+            box.appendChild(svg);
+            box.innerHTML += '<div class="price">' + price + '</div>';
+            const svgEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svgEl.setAttribute('id', 'bc' + i);
+            box.insertBefore(svgEl, box.lastChild);
+            preview.appendChild(box);
+            JsBarcode('#bc' + i, barcode, { format: 'CODE128', width: 1.8, height: bcHeight, displayValue: true, fontSize: 10, margin: 3 });
+          }
+        }
+        window.onload = renderLabels;
+      <\/script>
+    </body></html>`);
+    win.document.close();
   };
 
   const filtered = products.filter(p =>
@@ -197,17 +244,13 @@ function ProductMasterModal({ onClose }) {
                     <td style={{ fontWeight: 600, color: p.is_active ? 'var(--text)' : 'var(--text3)' }}>{p.name}</td>
                     <td style={{ fontFamily: 'var(--mono)', color: 'var(--accent)' }}>{fmt(p.selling_price)}</td>
                     <td><span className="badge badge-blue">{p.selling_unit}</span></td>
-                    <td style={{ fontFamily: 'var(--mono)' }}>
-                      {parseFloat(p.stock_quantity).toFixed(p.selling_unit === 'kg' ? 3 : 0)}
-                    </td>
+                    <td style={{ fontFamily: 'var(--mono)' }}>{parseFloat(p.stock_quantity).toFixed(p.selling_unit === 'kg' ? 3 : 0)}</td>
                     <td><span className={`badge ${p.is_active ? 'badge-green' : 'badge-red'}`}>{p.is_active ? 'Active' : 'Disabled'}</span></td>
                     <td>
                       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                         <button className="btn btn-secondary btn-sm" onClick={() => setModal(p)}>✏️ Edit</button>
                         <button className="btn btn-secondary btn-sm" onClick={() => printBarcode(p)}
-                          style={{ color: 'var(--purple)', borderColor: 'var(--purple)' }} disabled={printing?.id === p.id}>
-                          🖨️ Barcode
-                        </button>
+                          style={{ color: 'var(--purple)', borderColor: 'var(--purple)' }}>🖨️ Barcode</button>
                         <button className={`btn btn-sm ${p.is_active ? 'btn-danger' : 'btn-green'}`} onClick={() => toggleActive(p)}>
                           {p.is_active ? 'Disable' : 'Enable'}
                         </button>
@@ -302,9 +345,13 @@ function PurchaseReturnModal({ onClose }) {
   const [product,  setProduct]  = useState(null);
   const [quantity, setQuantity] = useState('1');
   const [reason,   setReason]   = useState('');
+  const [vendorId, setVendorId] = useState('');
+  const [vendors,  setVendors]  = useState([]);
   const [loading,  setLoading]  = useState(false);
   const debounceRef = useRef(); const resultsRef = useRef([]);
   resultsRef.current = results;
+
+  useEffect(() => { getVendors().then(r => setVendors(r.data.filter(v => v.is_active))); }, []);
 
   const handleChange = e => {
     const v = e.target.value; setQuery(v);
@@ -340,9 +387,10 @@ function PurchaseReturnModal({ onClose }) {
     if (qty > parseFloat(product.stock_quantity)) { toast.error('Return quantity exceeds current stock'); return; }
     setLoading(true);
     try {
-      await createPurchaseReturn({ product: product.id, quantity: qty, reason });
-      toast.success(`Purchase return recorded for ${product.name}`);
-      onClose();
+      const payload = { product: product.id, quantity: qty, reason };
+      if (vendorId) payload.vendor = vendorId;
+      await createPurchaseReturn(payload);
+      toast.success(`Purchase return recorded for ${product.name}`); onClose();
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed to record return'); }
     finally { setLoading(false); }
   };
@@ -359,12 +407,9 @@ function PurchaseReturnModal({ onClose }) {
           {searching && <div style={{ position: 'absolute', right: 14, top: 34, fontSize: 12, color: 'var(--text3)' }}>searching…</div>}
           {results.length > 0 && (
             <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200,
-              background: 'var(--surface)', border: '1px solid var(--border)',
-              borderRadius: 'var(--radius)', marginTop: 2, overflow: 'hidden', boxShadow: 'var(--shadow)' }}>
+              background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', marginTop: 2, maxHeight: 220, overflowY: 'auto', boxShadow: 'var(--shadow)' }}>
               {results.map((p, i) => (
-                <div key={`${p.id}-${i}`} onClick={() => selectProduct(p)} style={{
-                  padding: '10px 14px', cursor: 'pointer', borderBottom: '1px solid var(--border)',
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                <div key={`${p.id}-${i}`} onClick={() => selectProduct(p)} style={{ padding: '10px 14px', cursor: 'pointer', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
                   onMouseEnter={e => e.currentTarget.style.background = 'var(--accent-dim)'}
                   onMouseLeave={e => e.currentTarget.style.background = ''}>
                   <div>
@@ -390,6 +435,13 @@ function PurchaseReturnModal({ onClose }) {
           </div>
         )}
         <div className="form-group">
+          <label>Vendor (select if returning to specific vendor)</label>
+          <select value={vendorId} onChange={e => setVendorId(e.target.value)}>
+            <option value="">— Select Vendor (optional) —</option>
+            {vendors.map(v => <option key={v.id} value={v.id}>{v.name}{v.phone ? ` · ${v.phone}` : ''}</option>)}
+          </select>
+        </div>
+        <div className="form-group">
           <label>Return Quantity {product ? `(${product.selling_unit})` : ''}</label>
           <input type="text" inputMode="decimal" value={quantity}
             onChange={e => setQuantity(e.target.value)}
@@ -413,28 +465,37 @@ function PurchaseReturnModal({ onClose }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Product Search Cell — fixed-position dropdown, works with many items
+// ─────────────────────────────────────────────────────────────────────────────
 function ProductSearchCell({ value, onSelect }) {
   const [query,    setQuery]    = useState(value?.name || '');
   const [results,  setResults]  = useState([]);
   const [searching,setSearching]= useState(false);
   const [dropPos,  setDropPos]  = useState(null);
+  const [open,     setOpen]     = useState(false);
   const wrapRef = useRef(); const debounceRef = useRef(); const resultsRef = useRef([]);
   resultsRef.current = results;
 
+  const calcDrop = useCallback(() => {
+    if (wrapRef.current) {
+      const rect = wrapRef.current.getBoundingClientRect();
+      setDropPos({ top: rect.bottom + window.scrollY, left: rect.left + window.scrollX, width: Math.max(rect.width, 320) });
+    }
+  }, []);
+
   const doSearch = useCallback(async q => {
-    if (!q.trim()) { setResults([]); return; }
+    if (!q.trim()) { setResults([]); setOpen(false); return; }
     setSearching(true);
     try {
       const { data } = await searchProducts(q);
       const seen = new Set();
       const unique = data.filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true; });
       setResults(unique);
-      if (wrapRef.current) {
-        const rect = wrapRef.current.getBoundingClientRect();
-        setDropPos({ top: rect.bottom + window.scrollY, left: rect.left + window.scrollX, width: rect.width });
-      }
-    } catch { setResults([]); } finally { setSearching(false); }
-  }, []);
+      setOpen(unique.length > 0);
+      calcDrop();
+    } catch { setResults([]); setOpen(false); } finally { setSearching(false); }
+  }, [calcDrop]);
 
   const handleChange = e => {
     const v = e.target.value; setQuery(v);
@@ -442,7 +503,7 @@ function ProductSearchCell({ value, onSelect }) {
     debounceRef.current = setTimeout(() => doSearch(v), 300);
   };
 
-  const pick = p => { setQuery(p.name); setResults([]); setDropPos(null); onSelect(p); };
+  const pick = p => { setQuery(p.name); setResults([]); setOpen(false); onSelect(p); };
 
   const handleKeyDown = async e => {
     if (e.key === 'Enter') {
@@ -455,25 +516,37 @@ function ProductSearchCell({ value, onSelect }) {
         if (rows.length > 0) pick(rows[0]);
       } catch { toast.error('Product not found'); }
     }
-    if (e.key === 'Escape') { setResults([]); setDropPos(null); }
+    if (e.key === 'Escape') { setResults([]); setOpen(false); }
   };
 
   useEffect(() => {
-    const handler = e => { if (wrapRef.current && !wrapRef.current.contains(e.target)) { setResults([]); setDropPos(null); } };
+    const handler = e => { if (wrapRef.current && !wrapRef.current.contains(e.target)) { setResults([]); setOpen(false); } };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  // Recalculate drop position on scroll/resize
+  useEffect(() => {
+    if (!open) return;
+    const update = () => calcDrop();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => { window.removeEventListener('scroll', update, true); window.removeEventListener('resize', update); };
+  }, [open, calcDrop]);
 
   return (
     <div ref={wrapRef} style={{ position: 'relative', minWidth: 200 }}>
       <input value={query} onChange={handleChange} onKeyDown={handleKeyDown}
         placeholder="Scan / search…" style={{ fontSize: 13, padding: '6px 10px', width: '100%' }} />
       {searching && <div style={{ position: 'absolute', right: 8, top: 8, fontSize: 11, color: 'var(--text3)' }}>…</div>}
-      {results.length > 0 && dropPos && (
-        <div style={{ position: 'fixed', top: dropPos.top, left: dropPos.left, width: Math.max(dropPos.width, 320), zIndex: 9999,
-          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', boxShadow: 'var(--shadow)', maxHeight: 280, overflowY: 'auto' }}>
+      {open && results.length > 0 && dropPos && (
+        <div style={{
+          position: 'fixed', top: dropPos.top, left: dropPos.left, width: dropPos.width,
+          zIndex: 99999, background: 'var(--surface)', border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)', boxShadow: 'var(--shadow)', maxHeight: 260, overflowY: 'auto',
+        }}>
           {results.map(p => (
-            <div key={p.id} onClick={() => pick(p)} style={{ padding: '10px 14px', cursor: 'pointer', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+            <div key={p.id} onMouseDown={() => pick(p)} style={{ padding: '9px 14px', cursor: 'pointer', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
               onMouseEnter={e => e.currentTarget.style.background = 'var(--accent-dim)'}
               onMouseLeave={e => e.currentTarget.style.background = ''}>
               <div>
@@ -495,11 +568,12 @@ function ProductSearchCell({ value, onSelect }) {
 const emptyRow = () => ({
   _id: Date.now() + Math.random(),
   product: null, purchase_unit: 'nos',
-  quantity: '', purchase_price: '', tax: '0',
+  quantity: '', purchase_price: '', tax: '0', tax_type: 'excluding',
   total_qty: '', current_mrp: '', mrp: '', selling_unit: 'nos',
 });
 
 export default function Purchase() {
+  const { isAdmin, can } = usePermissions();
   const [vendors,        setVendors]        = useState([]);
   const [selectedVendor, setSelectedVendor] = useState('');
   const [rows,           setRows]           = useState([emptyRow()]);
@@ -509,6 +583,7 @@ export default function Purchase() {
   const [showProduct,    setShowProduct]    = useState(false);
   const [showVendor,     setShowVendor]     = useState(false);
   const [showPurReturn,  setShowPurReturn]  = useState(false);
+  
 
   const refreshPurchaseNumber = () => {
     getPurchases().then(r => {
@@ -545,25 +620,38 @@ export default function Purchase() {
   const addRow    = () => setRows(prev => [...prev, emptyRow()]);
   const removeRow = id => setRows(prev => prev.length > 1 ? prev.filter(r => r._id !== id) : prev);
 
-  // cost_per_item = purchase_price ÷ total_qty
+  // cost_per_item = base_purchase_price ÷ total_qty
   const getCostPerItem = row => {
-    const price    = parseFloat(row.purchase_price);
-    const totalQty = parseFloat(row.total_qty);
-    if (!price || !totalQty || totalQty <= 0) return null;
-    return price / totalQty;
+    const qty      = parseFloat(row.quantity) || 0;
+    const totalQty = parseFloat(row.total_qty) || 0;
+    const basePrice = getBasePrice(row);
+    if (!qty || !totalQty || !basePrice) return null;
+    const totalPurchase = qty * basePrice;
+    return totalPurchase / totalQty;
   };
 
-  // total_value = total_qty × cost_per_item × (1 + tax/100)
-  // = purchase_price × (1 + tax/100)   [since total_qty × (price/total_qty) = price]
+  // Total value calculation:
+  // Excluding: qty × price × (1 + tax/100)
+  // Including: qty × price (tax already inside price)
   const getRowTotalValue = row => {
-  const totalQty = parseFloat(row.total_qty);
-  const cost     = getCostPerItem(row);
-  const tax      = parseFloat(row.tax) || 0;
+    const qty   = parseFloat(row.quantity) || 0;
+    const price = parseFloat(row.purchase_price) || 0;
+    const tax   = parseFloat(row.tax) || 0;
+    if (row.tax_type === 'including') {
+      return qty * price; // price already includes tax
+    }
+    return qty * price * (1 + tax / 100);
+  };
 
-  if (!cost || !totalQty) return 0;
-
-  return totalQty * cost * (1 + tax / 100);
-};
+  // Base price (excluding tax) — used for cost calculations
+  const getBasePrice = row => {
+    const price = parseFloat(row.purchase_price) || 0;
+    const tax   = parseFloat(row.tax) || 0;
+    if (row.tax_type === 'including') {
+      return price / (1 + tax / 100); // extract base from inclusive price
+    }
+    return price;
+  };
 
   const handleSubmit = async () => {
     if (!selectedVendor) { toast.error('Please select a vendor'); return; }
@@ -577,18 +665,20 @@ export default function Purchase() {
     setLoading(true);
     try {
       const payload = {
-        vendor:  selectedVendor,
-        is_paid: isPaid,
+        vendor: selectedVendor, is_paid: isPaid,
         items: rows.map(r => {
-          const qty      = parseFloat(r.quantity);
-          const totalQty = parseFloat(r.total_qty);
+          const qty        = parseFloat(r.quantity);
+          const totalQty   = parseFloat(r.total_qty);
           const sellingQty = r.purchase_unit === 'case' ? (totalQty / qty) : 1;
+          // If tax is including, store the base price (excl tax) in purchase_price
+          const basePrice  = getBasePrice(r);
           return {
             product:        r.product.id,
             purchase_unit:  r.purchase_unit,
             quantity:       qty,
-            purchase_price: parseFloat(r.purchase_price),
+            purchase_price: parseFloat(basePrice.toFixed(4)),
             tax:            parseFloat(r.tax) || 0,
+            tax_type:       r.tax_type,
             mrp:            parseFloat(r.mrp),
             selling_unit:   r.selling_unit,
             selling_qty:    sellingQty,
@@ -597,27 +687,41 @@ export default function Purchase() {
       };
       await createPurchaseBill(payload);
       toast.success(`Purchase ${purchaseNumber} recorded! Payment: ${isPaid ? 'Paid ✅' : 'Not Paid ⏳'}`);
-      setRows([emptyRow()]);
-      setSelectedVendor('');
-      setIsPaid(true);
+      setRows([emptyRow()]); setSelectedVendor(''); setIsPaid(true);
       refreshPurchaseNumber();
-    } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to record purchase');
-    } finally { setLoading(false); }
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to record purchase'); }
+    finally { setLoading(false); }
   };
 
-  // Grand total = sum of all row total values
   const grandTotal = rows.reduce((s, r) => s + getRowTotalValue(r), 0);
+
+  // Shared style for read-only number inputs (removes spinner arrows via CSS class)
+  const numInputStyle = { fontSize: 13, padding: '6px 8px', textAlign: 'right' };
+  const numInputProps = { onKeyDown: noArrow, onWheel: noWheel };
 
   return (
     <div>
+      {/* Global CSS to remove spinner arrows */}
+      <style>{`
+        input[type=number]::-webkit-inner-spin-button,
+        input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        input[type=number] { -moz-appearance: textfield; }
+      `}</style>
+
       <div className="page-header">
         <h1>📦 Purchase</h1>
         <div style={{ display: 'flex', gap: 10 }}>
-          <button className="btn btn-secondary" onClick={() => setShowPurReturn(true)}
-            style={{ color: 'var(--red)', borderColor: 'var(--red)' }}>↩️ Purchase Return</button>
-                <button className="btn btn-secondary" onClick={() => setShowVendor(true)}>🏪 Vendor Master</button>
-          <button className="btn btn-secondary" onClick={() => setShowProduct(true)}>📦 Product Master</button>
+          <button className="btn btn-secondary" onClick={refreshPurchaseNumber}>🔄 Refresh</button>
+          {(isAdmin || can('can_access_purchase_return')) && (
+            <button className="btn btn-secondary" onClick={() => setShowPurReturn(true)}
+              style={{ color: 'var(--red)', borderColor: 'var(--red)' }}>↩️ Purchase Return</button>
+          )}
+          {(isAdmin || can('can_access_vendor_master')) && (
+            <button className="btn btn-secondary" onClick={() => setShowVendor(true)}>🏪 Vendor Master</button>
+          )}
+          {(isAdmin || can('can_access_product_master')) && (
+            <button className="btn btn-secondary" onClick={() => setShowProduct(true)}>📦 Product Master</button>
+          )}
         </div>
       </div>
 
@@ -662,7 +766,7 @@ export default function Purchase() {
 
       <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 16 }}>
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ minWidth: 1450 }}>
+          <table style={{ minWidth: 1500 }}>
             <thead>
               <tr>
                 <th style={{ minWidth: 220 }}>Product</th>
@@ -674,21 +778,21 @@ export default function Purchase() {
                   <div style={{ fontSize: 9, fontWeight: 400, color: 'var(--text3)', textTransform: 'none', letterSpacing: 0 }}>auto for nos/kg</div>
                 </th>
                 <th style={{ minWidth: 110 }}>Cost/Item (₹)</th>
-                <th style={{ minWidth: 70 }}>Tax (%) *</th>
+                <th style={{ minWidth: 155 }}>Tax (%)</th>
                 <th style={{ minWidth: 120 }}>Current MRP (₹)</th>
                 <th style={{ minWidth: 120 }}>New MRP (₹) *</th>
                 <th style={{ minWidth: 90 }}>Selling Unit</th>
-                <th style={{ minWidth: 120 }}>Total Value (₹)</th>
+                <th style={{ minWidth: 130 }}>Total Value (₹)</th>
                 <th style={{ minWidth: 44 }}></th>
               </tr>
             </thead>
             <tbody>
               {rows.map(row => {
-                const costPerItem  = getCostPerItem(row);
-                const rowTotal     = getRowTotalValue(row);
-                const isCase       = row.purchase_unit === 'case';
-                const mrpChanged   = row.current_mrp && row.mrp && row.current_mrp !== '—' &&
-                                     parseFloat(row.mrp) !== parseFloat(row.current_mrp);
+                const costPerItem = getCostPerItem(row);
+                const rowTotal    = getRowTotalValue(row);
+                const isCase      = row.purchase_unit === 'case';
+                const mrpChanged  = row.current_mrp && row.mrp && row.current_mrp !== '—' &&
+                                    parseFloat(row.mrp) !== parseFloat(row.current_mrp);
                 return (
                   <tr key={row._id}>
                     <td style={{ padding: '8px 10px' }}>
@@ -697,42 +801,27 @@ export default function Purchase() {
                     </td>
 
                     <td style={{ padding: '8px 6px' }}>
-                      <select value={row.purchase_unit} onChange={e => updateRow(row._id, 'purchase_unit', e.target.value)}
-                        style={{ fontSize: 13, padding: '6px 8px' }}>
+                      <select value={row.purchase_unit} onChange={e => updateRow(row._id, 'purchase_unit', e.target.value)} style={{ fontSize: 13, padding: '6px 8px' }}>
                         {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
                       </select>
                     </td>
 
-                    {/* Qty — no arrow keys */}
                     <td style={{ padding: '8px 6px' }}>
-                      <input type="number" value={row.quantity}
-                        onChange={e => updateRow(row._id, 'quantity', e.target.value)}
-                        onKeyDown={noArrow}
-                        placeholder="0" min="0" step="0.001"
-                        style={{ fontSize: 13, padding: '6px 8px', textAlign: 'right' }} />
+                      <input type="number" value={row.quantity} onChange={e => updateRow(row._id, 'quantity', e.target.value)}
+                        placeholder="0" min="0" step="0.001" style={numInputStyle} {...numInputProps} />
                     </td>
 
-                    {/* Purchase price — no arrow keys */}
                     <td style={{ padding: '8px 6px' }}>
-                      <input type="number" value={row.purchase_price}
-                        onChange={e => updateRow(row._id, 'purchase_price', e.target.value)}
-                        onKeyDown={noArrow}
-                        placeholder="0.00" min="0" step="0.01"
-                        style={{ fontSize: 13, padding: '6px 8px', textAlign: 'right' }} />
+                      <input type="number" value={row.purchase_price} onChange={e => updateRow(row._id, 'purchase_price', e.target.value)}
+                        placeholder="0.00" min="0" step="0.01" style={numInputStyle} {...numInputProps} />
                     </td>
 
-                    {/* Total Qty */}
                     <td style={{ padding: '8px 6px' }}>
                       <input type="number" value={row.total_qty}
                         onChange={e => isCase ? updateRow(row._id, 'total_qty', e.target.value) : undefined}
-                        readOnly={!isCase}
-                        onKeyDown={noArrow}
-                        placeholder={isCase ? 'e.g. 24' : 'auto'}
-                        min="0" step="0.001"
-                        style={{ fontSize: 13, padding: '6px 8px', textAlign: 'right',
-                          opacity: !isCase ? 0.55 : 1, cursor: !isCase ? 'not-allowed' : 'text',
-                          background: !isCase ? 'var(--bg2)' : undefined,
-                          borderColor: isCase ? 'var(--blue)' : undefined }} />
+                        readOnly={!isCase} placeholder={isCase ? 'e.g. 24' : 'auto'}
+                        min="0" step="0.001" style={{ ...numInputStyle, opacity: !isCase ? 0.55 : 1, cursor: !isCase ? 'not-allowed' : 'text', background: !isCase ? 'var(--bg2)' : undefined, borderColor: isCase ? 'var(--blue)' : undefined }}
+                        {...numInputProps} />
                       {isCase && row.quantity && row.total_qty && (
                         <div style={{ fontSize: 10, color: 'var(--blue)', marginTop: 2, textAlign: 'right' }}>
                           {(parseFloat(row.total_qty) / parseFloat(row.quantity)).toFixed(2)} per case
@@ -740,61 +829,62 @@ export default function Purchase() {
                       )}
                     </td>
 
-                    {/* Cost per item */}
                     <td style={{ padding: '8px 6px' }}>
                       <div style={{ padding: '6px 10px', background: 'var(--bg2)', borderRadius: 'var(--radius)', fontSize: 13, fontFamily: 'var(--mono)', color: 'var(--green)', border: '1px solid var(--border)', textAlign: 'right', minWidth: 90, fontWeight: 600 }}>
                         {costPerItem !== null ? fmt(costPerItem) : '—'}
                       </div>
-                      <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2, textAlign: 'right' }}>price ÷ total qty</div>
                     </td>
 
-                    {/* Tax — no arrow keys */}
                     <td style={{ padding: '8px 6px' }}>
-                      <input type="number" value={row.tax}
-                        onChange={e => updateRow(row._id, 'tax', e.target.value)}
-                        onKeyDown={noArrow}
-                        placeholder="0" min="0" step="0.01"
-                        style={{ fontSize: 13, padding: '6px 8px', textAlign: 'right' }} />
+                      <input type="number" value={row.tax} onChange={e => updateRow(row._id, 'tax', e.target.value)}
+                        placeholder="0" min="0" step="0.01" style={{ ...numInputStyle, marginBottom: 4 }} {...numInputProps} />
+                      <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                        {['excluding','including'].map(tt => (
+                          <button key={tt} onClick={() => updateRow(row._id, 'tax_type', tt)}
+                            style={{ flex: 1, fontSize: 10, padding: '3px 4px', borderRadius: 4, border: `1px solid ${row.tax_type === tt ? 'var(--accent)' : 'var(--border)'}`, background: row.tax_type === tt ? 'var(--accent-dim)' : 'var(--bg3)', color: row.tax_type === tt ? 'var(--accent)' : 'var(--text3)', cursor: 'pointer', fontWeight: row.tax_type === tt ? 700 : 400 }}>
+                            {tt === 'excluding' ? 'Excl.' : 'Incl.'}
+                          </button>
+                        ))}
+                      </div>
+                      {row.tax_type === 'including' && parseFloat(row.tax) > 0 && parseFloat(row.purchase_price) > 0 && (
+                        <div style={{ fontSize: 9, color: 'var(--accent)', marginTop: 2, textAlign: 'right' }}>
+                          Base: {fmt(getBasePrice(row))}
+                        </div>
+                      )}
                     </td>
 
-                    {/* Current MRP */}
                     <td style={{ padding: '8px 6px' }}>
                       <div style={{ padding: '6px 10px', background: 'var(--bg2)', borderRadius: 'var(--radius)', fontSize: 13, fontFamily: 'var(--mono)', color: 'var(--text3)', border: '1px solid var(--border)', textAlign: 'right', minWidth: 80 }}>
                         {row.current_mrp || '—'}
                       </div>
                     </td>
 
-                    {/* New MRP — no arrow keys */}
                     <td style={{ padding: '8px 6px' }}>
-                      <input type="number" value={row.mrp}
-                        onChange={e => updateRow(row._id, 'mrp', e.target.value)}
-                        onKeyDown={noArrow}
+                      <input type="number" value={row.mrp} onChange={e => updateRow(row._id, 'mrp', e.target.value)}
                         placeholder="0.00" min="0" step="0.01"
-                        style={{ fontSize: 13, padding: '6px 8px', textAlign: 'right',
-                          borderColor: mrpChanged ? 'var(--accent)' : undefined,
-                          color: mrpChanged ? 'var(--accent)' : undefined }} />
+                        style={{ ...numInputStyle, borderColor: mrpChanged ? 'var(--accent)' : undefined, color: mrpChanged ? 'var(--accent)' : undefined }}
+                        {...numInputProps} />
                       {mrpChanged && <div style={{ fontSize: 10, color: 'var(--accent)', marginTop: 2 }}>↑ was ₹{row.current_mrp}</div>}
                     </td>
 
-                    {/* Selling unit */}
                     <td style={{ padding: '8px 6px' }}>
-                      <select value={row.selling_unit} onChange={e => updateRow(row._id, 'selling_unit', e.target.value)}
-                        style={{ fontSize: 13, padding: '6px 8px' }}>
+                      <select value={row.selling_unit} onChange={e => updateRow(row._id, 'selling_unit', e.target.value)} style={{ fontSize: 13, padding: '6px 8px' }}>
                         {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
                       </select>
                     </td>
 
-                    {/* Total Value — auto calculated */}
+                    {/* Total Value = qty × purchase_price × (1 + tax%) */}
                     <td style={{ padding: '8px 6px' }}>
-                      <div style={{ padding: '6px 10px', background: rowTotal > 0 ? 'var(--accent-dim)' : 'var(--bg2)', borderRadius: 'var(--radius)', fontSize: 13, fontFamily: 'var(--mono)', color: rowTotal > 0 ? 'var(--accent)' : 'var(--text3)', border: `1px solid ${rowTotal > 0 ? 'var(--accent)' : 'var(--border)'}`, textAlign: 'right', minWidth: 100, fontWeight: 700 }}>
+                      <div style={{ padding: '6px 10px', background: rowTotal > 0 ? 'var(--accent-dim)' : 'var(--bg2)', borderRadius: 'var(--radius)', fontSize: 13, fontFamily: 'var(--mono)', color: rowTotal > 0 ? 'var(--accent)' : 'var(--text3)', border: `1px solid ${rowTotal > 0 ? 'var(--accent)' : 'var(--border)'}`, textAlign: 'right', minWidth: 110, fontWeight: 700 }}>
                         {rowTotal > 0 ? fmt(rowTotal) : '—'}
                       </div>
-                      <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2, textAlign: 'right' }}>qty × price + tax</div>
+                      {rowTotal > 0 && <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2, textAlign: 'right' }}>
+                        {row.tax_type === 'including' ? 'qty × price (tax incl.)' : 'qty × price + tax'}
+                      </div>}
                     </td>
 
                     <td style={{ padding: '8px 6px', textAlign: 'center' }}>
-                      <button className="btn btn-danger btn-sm" onClick={() => removeRow(row._id)}
-                        style={{ padding: '4px 8px' }} disabled={rows.length === 1}>✕</button>
+                      <button className="btn btn-danger btn-sm" onClick={() => removeRow(row._id)} style={{ padding: '4px 8px' }} disabled={rows.length === 1}>✕</button>
                     </td>
                   </tr>
                 );

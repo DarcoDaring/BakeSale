@@ -1,7 +1,5 @@
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
-import random
-import string
 
 
 class UserManager(BaseUserManager):
@@ -38,10 +36,21 @@ class User(AbstractBaseUser, PermissionsMixin):
 
 
 def generate_barcode():
+    """Generate sequential barcode starting from BKS00000001."""
+    prefix = 'BKS'
+    last = Product.objects.filter(barcode__startswith=prefix).order_by('-barcode').first()
+    if last:
+        try:
+            num = int(last.barcode.replace(prefix, '')) + 1
+        except ValueError:
+            num = 1
+    else:
+        num = 1
     while True:
-        barcode = ''.join(random.choices(string.digits, k=12))
+        barcode = f"{prefix}{num:08d}"
         if not Product.objects.filter(barcode=barcode).exists():
             return barcode
+        num += 1
 
 
 class Vendor(models.Model):
@@ -118,12 +127,17 @@ class Purchase(models.Model):
     UNIT_CHOICES = [
         ('nos', 'Nos'), ('kg', 'Kg'), ('case', 'case'),
     ]
+    TAX_TYPE_CHOICES = [
+        ('excluding', 'Tax Excluding'),
+        ('including', 'Tax Including'),
+    ]
     bill           = models.ForeignKey(PurchaseBill, on_delete=models.CASCADE, related_name='items', null=True, blank=True)
     product        = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='purchases')
     purchase_unit  = models.CharField(max_length=10, choices=UNIT_CHOICES, default='nos')
     quantity       = models.DecimalField(max_digits=12, decimal_places=3)
     purchase_price = models.DecimalField(max_digits=10, decimal_places=2)
     tax            = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    tax_type       = models.CharField(max_length=10, choices=TAX_TYPE_CHOICES, default='excluding')
     mrp            = models.DecimalField(max_digits=10, decimal_places=2)
     selling_unit   = models.CharField(max_length=10, choices=UNIT_CHOICES, default='nos')
     selling_qty    = models.DecimalField(max_digits=12, decimal_places=3, default=1)
@@ -222,6 +236,7 @@ class PurchaseReturn(models.Model):
         ('returned', 'Product Returned'),
     ]
     product        = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='purchase_returns')
+    vendor         = models.ForeignKey(Vendor, on_delete=models.SET_NULL, null=True, blank=True, related_name='purchase_returns')
     quantity       = models.DecimalField(max_digits=12, decimal_places=3)
     purchase_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     tax            = models.DecimalField(max_digits=5, decimal_places=2, default=0)
@@ -299,3 +314,46 @@ class StockTransfer(models.Model):
 
     def __str__(self):
         return f"StockTransfer: {self.product.name} x{self.quantity}"
+
+
+class UserPermission(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='permission')
+
+    # Page access
+    can_access_sale     = models.BooleanField(default=True)
+    can_access_purchase = models.BooleanField(default=True)
+    can_access_reports  = models.BooleanField(default=True)
+    can_access_stock    = models.BooleanField(default=True)
+
+    # Sale sub-permissions
+    can_edit_bill   = models.BooleanField(default=True)
+    can_delete_bill = models.BooleanField(default=True)
+
+    # Purchase sub-permissions
+    can_access_vendor_master   = models.BooleanField(default=True)
+    can_access_product_master  = models.BooleanField(default=True)
+    can_access_purchase_return = models.BooleanField(default=True)
+
+    # Reports sub-permissions
+    can_view_sale_report        = models.BooleanField(default=True)
+    can_view_itemwise_report    = models.BooleanField(default=True)
+    can_view_internal_report    = models.BooleanField(default=True)
+    can_view_purreturn_report   = models.BooleanField(default=True)
+    can_view_purchase_report    = models.BooleanField(default=True)
+    can_view_salestax_report    = models.BooleanField(default=True)
+    can_view_purtax_report      = models.BooleanField(default=True)
+    can_view_direct_report      = models.BooleanField(default=True)
+    can_print_reports           = models.BooleanField(default=True)
+
+    # Stock sub-permissions
+    can_stock_transfer  = models.BooleanField(default=True)
+    can_opening_stock   = models.BooleanField(default=True)
+
+    # Sale sub-permissions — direct sale access
+    can_access_direct_sale = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = 'User Permission'
+
+    def __str__(self):
+        return f'Permissions for {self.user.username}'

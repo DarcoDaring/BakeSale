@@ -77,6 +77,7 @@ export const createDirectMaster = d       => api.post('/direct-masters/', d);
 export const updateDirectMaster = (id, d) => api.patch(`/direct-masters/${id}/`, d);
 
 export const createDirectSale = d => api.post('/direct-sales/', d);
+export const getDirectSaleReport = params => api.get('/direct-sales/report/', { params });
 
 export const createStockAdjustment  = d  => api.post('/stock-adjustments/', d);
 export const getStockAdjustments    = () => api.get('/stock-adjustments/');
@@ -90,5 +91,18 @@ export const createUser = d       => api.post('/users/', d);
 export const updateUser = (id, d) => api.patch(`/users/${id}/`, d);
 export const deleteUser = id      => api.delete(`/users/${id}/`);
 export const getMe      = ()      => api.get('/users/me/');
+
+
+
+export const getMyPermissions       = ()           => api.get('/permissions/me/');
+export const getAllUserPermissions   = ()           => api.get('/permissions/');
+export const updateUserPermissions  = (userId, data) => api.patch(`/permissions/update/${userId}/`, data);
+export const markPurchasePaid       = (id)         => api.patch(`/purchases/${id}/mark_paid/`);
+export const downloadBackup = () => api.get('/backup/', { responseType: 'blob' });
+export const uploadBackup  = file => {
+  const fd = new FormData();
+  fd.append('file', file);
+  return api.post('/backup/', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+};
 
 export default api;

@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import (
-    User, Vendor, Product, StockBatch, PurchaseBill, Purchase,
+    User, UserPermission, Vendor, Product, StockBatch, PurchaseBill, Purchase,
     SaleBill, SaleItem, ReturnItem,
     InternalSaleMaster, InternalSale, PurchaseReturn,
     DirectSaleMaster, DirectSale, StockAdjustmentRequest, StockTransfer
@@ -49,6 +49,11 @@ class UserSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
+class UserPermissionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = UserPermission
+        fields = '__all__'
+        read_only_fields = ['id', 'user']
 
 class VendorSerializer(serializers.ModelSerializer):
     class Meta:
@@ -83,7 +88,7 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Purchase
         fields = ['id', 'product', 'product_name', 'product_barcode',
-                  'purchase_unit', 'quantity', 'purchase_price', 'tax',
+                  'purchase_unit', 'quantity', 'purchase_price', 'tax', 'tax_type',
                   'mrp', 'selling_unit', 'selling_qty', 'cost_per_item', 'date']
         read_only_fields = ['id', 'date']
 
@@ -387,11 +392,13 @@ class InternalSaleSerializer(serializers.ModelSerializer):
 class PurchaseReturnSerializer(serializers.ModelSerializer):
     product_name    = serializers.CharField(source='product.name',    read_only=True)
     product_barcode = serializers.CharField(source='product.barcode', read_only=True)
+    vendor_name     = serializers.CharField(source='vendor.name',     read_only=True)
     item_cost       = serializers.FloatField(read_only=True)
 
     class Meta:
         model  = PurchaseReturn
         fields = ['id', 'product', 'product_name', 'product_barcode',
+                  'vendor', 'vendor_name',
                   'quantity', 'purchase_price', 'tax', 'item_cost',
                   'reason', 'status', 'date']
         read_only_fields = ['id', 'date', 'purchase_price', 'tax']

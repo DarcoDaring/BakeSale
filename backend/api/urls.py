@@ -16,5 +16,9 @@ router.register(r'direct-masters',    views.DirectSaleMasterViewSet)
 router.register(r'direct-sales',      views.DirectSaleViewSet)
 router.register(r'stock-adjustments', views.StockAdjustmentRequestViewSet)
 router.register(r'stock-transfers',   views.StockTransferViewSet)
+router.register(r'permissions',       views.UserPermissionViewSet, basename='permissions')
 
-urlpatterns = [path('', include(router.urls))]
+urlpatterns = [
+    path('', include(router.urls)),
+    path('backup/', views.BackupView.as_view(), name='backup'),
+]

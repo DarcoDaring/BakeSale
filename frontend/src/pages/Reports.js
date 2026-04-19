@@ -5,9 +5,10 @@ import {
   getInternalSaleReport, getInternalMasters,
   getPurchaseReturnReport, getPurchaseReport,
   getPurchaseBill, markPurchaseReturned,
-  getSalesTaxReport, getPurchaseTaxReport
+  getSalesTaxReport, getPurchaseTaxReport,markPurchasePaid,
+  getDirectMasters, createDirectMaster, updateDirectMaster, createDirectSale, getDirectSaleReport
 } from '../services/api';
-
+import { usePermissions } from '../context/PermissionContext';
 const fmt = n => `₹${parseFloat(n || 0).toFixed(2)}`;
 const payLabel = { cash:'Cash', card:'Card', upi:'UPI', cash_card:'Cash & Card', cash_upi:'Cash & UPI' };
 const today = () => new Date().toISOString().split('T')[0];
@@ -23,9 +24,6 @@ function doPrint(html) {
   el.innerHTML = '';
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Print Modal
-// ─────────────────────────────────────────────────────────────────────────────
 function PrintModal({ onClose, onPrint, title }) {
   const t = today();
   const [from, setFrom] = useState(t);
@@ -54,8 +52,7 @@ function PrintModal({ onClose, onPrint, title }) {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
-          <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }}
-            onClick={handlePrint} disabled={loading}>
+          <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }} onClick={handlePrint} disabled={loading}>
             {loading ? 'Preparing…' : '🖨️ Print'}
           </button>
           <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
@@ -65,9 +62,6 @@ function PrintModal({ onClose, onPrint, title }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Purchase Bill Detail Modal
-// ─────────────────────────────────────────────────────────────────────────────
 function PurchaseBillDetailModal({ billId, onClose }) {
   const [bill, setBill]     = useState(null);
   const [loading, setLoading] = useState(true);
@@ -82,9 +76,11 @@ function PurchaseBillDetailModal({ billId, onClose }) {
   if (!bill) return null;
 
   const totalValue = bill.items.reduce((s, item) => {
-    const qty  = parseFloat(item.quantity) * parseFloat(item.selling_qty);
-    const base = qty * parseFloat(item.purchase_price);
-    return s + base + base * parseFloat(item.tax) / 100;
+    const qty   = parseFloat(item.quantity);
+    const price = parseFloat(item.purchase_price);
+    const tax   = parseFloat(item.tax);
+    const base  = qty * price;
+    return s + base + base * tax / 100;
   }, 0);
 
   return (
@@ -108,13 +104,16 @@ function PurchaseBillDetailModal({ billId, onClose }) {
         <div style={{ overflowY: 'auto', flex: 1 }}>
           <table>
             <thead>
-              <tr><th>Product</th><th>Pur. Unit</th><th>Qty</th><th>Price</th><th>Tax %</th><th>MRP</th><th>Sell Unit</th><th>Qty/Unit</th><th>Stock Added</th><th>Value</th></tr>
+              <tr><th>Product</th><th>Pur. Unit</th><th>Qty</th><th>Price/Unit</th><th>Tax %</th><th>Tax (₹)</th><th>MRP</th><th>Total Value</th></tr>
             </thead>
             <tbody>
               {bill.items.map((item, i) => {
-                const stockAdded = parseFloat(item.quantity) * parseFloat(item.selling_qty);
-                const base       = parseFloat(item.purchase_price) * stockAdded;
-                const totalVal   = base + base * parseFloat(item.tax) / 100;
+                const qty      = parseFloat(item.quantity);
+                const price    = parseFloat(item.purchase_price);
+                const taxRate  = parseFloat(item.tax);
+                const base     = qty * price;
+                const taxAmt   = base * taxRate / 100;
+                const totalVal = base + taxAmt;
                 return (
                   <tr key={i}>
                     <td>
@@ -122,13 +121,11 @@ function PurchaseBillDetailModal({ billId, onClose }) {
                       <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: 'var(--mono)' }}>{item.product_barcode}</div>
                     </td>
                     <td><span className="badge badge-blue">{item.purchase_unit}</span></td>
-                    <td style={{ fontFamily: 'var(--mono)' }}>{item.quantity}</td>
-                    <td style={{ fontFamily: 'var(--mono)' }}>{fmt(item.purchase_price)}</td>
-                    <td style={{ fontFamily: 'var(--mono)' }}>{item.tax}%</td>
+                    <td style={{ fontFamily: 'var(--mono)' }}>{qty}</td>
+                    <td style={{ fontFamily: 'var(--mono)' }}>{fmt(price)}</td>
+                    <td style={{ fontFamily: 'var(--mono)' }}>{taxRate}%</td>
+                    <td style={{ fontFamily: 'var(--mono)', color: 'var(--text3)' }}>{fmt(taxAmt)}</td>
                     <td style={{ fontFamily: 'var(--mono)', color: 'var(--accent)', fontWeight: 600 }}>{fmt(item.mrp)}</td>
-                    <td><span className="badge badge-purple">{item.selling_unit}</span></td>
-                    <td style={{ fontFamily: 'var(--mono)' }}>{item.selling_qty}</td>
-                    <td style={{ fontFamily: 'var(--mono)', color: 'var(--green)', fontWeight: 600 }}>+{stockAdded.toFixed(3)}</td>
                     <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--accent)' }}>{fmt(totalVal)}</td>
                   </tr>
                 );
@@ -145,9 +142,6 @@ function PurchaseBillDetailModal({ billId, onClose }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Pending Returns Modal
-// ─────────────────────────────────────────────────────────────────────────────
 function PendingReturnsModal({ returns, onClose }) {
   return (
     <div className="modal-overlay">
@@ -179,9 +173,6 @@ function PendingReturnsModal({ returns, onClose }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Purchase Bills List Modal
-// ─────────────────────────────────────────────────────────────────────────────
 function PurchaseBillsListModal({ bills, title, onClose, onViewDetail }) {
   return (
     <div className="modal-overlay">
@@ -192,14 +183,13 @@ function PurchaseBillsListModal({ bills, title, onClose, onViewDetail }) {
         </div>
         <div style={{ overflowY: 'auto' }}>
           <table>
-            <thead><tr><th>PO Number</th><th>Vendor</th><th>Date</th><th>Items</th><th>Total Value</th><th style={{ textAlign: 'right' }}>Actions</th></tr></thead>
+            <thead><tr><th>PO Number</th><th>Vendor</th><th>Date</th><th>Total Value</th><th style={{ textAlign: 'right' }}>Actions</th></tr></thead>
             <tbody>
               {bills.map((b, i) => (
                 <tr key={i} style={{ cursor: 'pointer' }} onClick={() => onViewDetail(b.id)}>
                   <td><span className="badge badge-orange" style={{ fontFamily: 'var(--mono)' }}>{b.purchase_number}</span></td>
                   <td style={{ fontWeight: 600 }}>{b.vendor_name}</td>
                   <td style={{ fontSize: 12, color: 'var(--text3)' }}>{new Date(b.date).toLocaleDateString()}</td>
-                  <td><span className="badge badge-blue">{b.item_count}</span></td>
                   <td style={{ fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{fmt(b.total_value)}</td>
                   <td onClick={e => e.stopPropagation()}>
                     <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -217,10 +207,8 @@ function PurchaseBillsListModal({ bills, title, onClose, onViewDetail }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Main Reports Page
-// ─────────────────────────────────────────────────────────────────────────────
 export default function Reports() {
+  const { isAdmin, can } = usePermissions();
   const [tab,            setTab]            = useState('sale');
   const [saleData,       setSaleData]       = useState(null);
   const [itemData,       setItemData]       = useState([]);
@@ -234,6 +222,7 @@ export default function Reports() {
   const [loading,        setLoading]        = useState(false);
   const [dateFrom,       setDateFrom]       = useState('');
   const [dateTo,         setDateTo]         = useState('');
+  const [taxRateFilter,  setTaxRateFilter]  = useState('');  // for sales tax tab
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [showPurPrint,   setShowPurPrint]   = useState(false);
   const [showSalesTaxPrint, setShowSalesTaxPrint] = useState(false);
@@ -242,6 +231,12 @@ export default function Reports() {
   const [showPendingRet, setShowPendingRet] = useState(false);
   const [purListModal,   setPurListModal]   = useState(null);
   const [markingId,      setMarkingId]      = useState(null);
+  const [markingPaidId, setMarkingPaidId] = useState(null);
+  const [directData,    setDirectData]    = useState(null);
+  const [showPurRetPrint,   setShowPurRetPrint]   = useState(false);
+  const [showItemwisePrint, setShowItemwisePrint] = useState(false);
+  const [showInternalPrint, setShowInternalPrint] = useState(false);
+  const [showDirectPrint,   setShowDirectPrint]   = useState(false);
 
   useEffect(() => { getInternalMasters().then(r => setMasters(r.data)); }, []);
 
@@ -251,6 +246,7 @@ export default function Reports() {
     if (tab === 'purreturn') fetchReport('purreturn');
     if (tab === 'salestax')  fetchReport('salestax');
     if (tab === 'purtax')    fetchReport('purtax');
+    if (tab === 'direct')    fetchReport('direct');
   }, [tab]);
 
   const fetchReport = async (overrideTab) => {
@@ -279,11 +275,15 @@ export default function Reports() {
         const { data } = await getPurchaseReport(params);
         setPurData(data);
       } else if (activeTab === 'salestax') {
+        if (taxRateFilter) params.tax_rate = taxRateFilter;
         const { data } = await getSalesTaxReport(params);
         setSalesTaxData(data);
       } else if (activeTab === 'purtax') {
         const { data } = await getPurchaseTaxReport(params);
         setPurTaxData(data);
+      } else if (activeTab === 'direct') {
+        const { data } = await getDirectSaleReport(params);
+        setDirectData(data);
       }
     } catch {}
     setLoading(false);
@@ -291,14 +291,26 @@ export default function Reports() {
 
   const toggleDest = id => setSelDests(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
+  // Auto-fetch internal sale when destination filter changes
+  useEffect(() => {
+    if (tab === 'internal') fetchReport('internal');
+  }, [selDests]);
+
   const handleMarkReturned = async id => {
     setMarkingId(id);
     try { await markPurchaseReturned(id); toast.success('Marked as returned'); fetchReport('purreturn'); }
     catch { toast.error('Failed to update status'); }
     finally { setMarkingId(null); }
   };
-
-  // ── Sale print ──────────────────────────────────────────────────────────
+const handleMarkPaid = async (billId) => {
+  setMarkingPaidId(billId);
+  try {
+    await markPurchasePaid(billId);
+    toast.success('Marked as paid ✅');
+    fetchReport('purchase');
+  } catch { toast.error('Failed to mark as paid'); }
+  finally { setMarkingPaidId(null); }
+};
   const handleSalePrint = async (from, to) => {
     try {
       const { data } = await getSaleReport({ date_from: from, date_to: to });
@@ -327,7 +339,7 @@ export default function Reports() {
                 <th style="border:1px solid #ccc;padding:7px">Payment</th>
                 <th style="border:1px solid #ccc;padding:7px;text-align:right">Total</th>
               </tr></thead>
-              <tbody>${bills.map((b, i) => `
+              <tbody>${(bills || []).map((b, i) => `
                 <tr style="background:${i%2===0?'#fff':'#fafafa'}">
                   <td style="border:1px solid #ccc;padding:6px;font-weight:600">${b.bill_number}</td>
                   <td style="border:1px solid #ccc;padding:6px">${new Date(b.created_at).toLocaleString()}</td>
@@ -335,7 +347,7 @@ export default function Reports() {
                   <td style="border:1px solid #ccc;padding:6px;text-align:right;font-weight:600">${fmt(b.total_amount)}</td>
                 </tr>`).join('')}</tbody>
               <tfoot><tr style="background:#f0f0f0">
-                <td colspan="3" style="border:1px solid #ccc;padding:7px;font-weight:800">Grand Total (${bills.length} bills)</td>
+                <td colspan="3" style="border:1px solid #ccc;padding:7px;font-weight:800">Grand Total</td>
                 <td style="border:1px solid #ccc;padding:7px;text-align:right;font-weight:800">${fmt(totals.grand_total)}</td>
               </tr></tfoot>
             </table>
@@ -344,7 +356,6 @@ export default function Reports() {
     } catch { alert('Failed to load report for printing'); }
   };
 
-  // ── Purchase print ────────────────────────────────────────────────────────
   const handlePurchasePrint = async (from, to) => {
     try {
       const { data } = await getPurchaseReport({ date_from: from, date_to: to });
@@ -363,12 +374,12 @@ export default function Reports() {
                 <th style="border:1px solid #ccc;padding:7px">PO No</th>
                 <th style="border:1px solid #ccc;padding:7px">Date</th>
                 <th style="border:1px solid #ccc;padding:7px">Vendor</th>
-                <th style="border:1px solid #ccc;padding:7px;text-align:right">Price</th>
-                <th style="border:1px solid #ccc;padding:7px;text-align:right">Tax</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">Purchase Value</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">Tax (₹)</th>
                 <th style="border:1px solid #ccc;padding:7px;text-align:right">Total</th>
                 <th style="border:1px solid #ccc;padding:7px;text-align:center">Payment</th>
               </tr></thead>
-              <tbody>${bills.map((b, i) => `
+              <tbody>${(bills||[]).map((b, i) => `
                 <tr style="background:${i%2===0?'#fff':'#fafafa'}">
                   <td style="border:1px solid #ccc;padding:6px;font-weight:600;font-family:monospace">${b.purchase_number}</td>
                   <td style="border:1px solid #ccc;padding:6px">${new Date(b.date).toLocaleDateString()}</td>
@@ -379,73 +390,73 @@ export default function Reports() {
                   <td style="border:1px solid #ccc;padding:6px;text-align:center">${b.is_paid?'Paid':'Not Paid'}</td>
                 </tr>`).join('')}</tbody>
               <tfoot><tr style="background:#f0f0f0">
-                <td colspan="5" style="border:1px solid #ccc;padding:7px;font-weight:800">Grand Total (${bills.length} purchases)</td>
+                <td colspan="5" style="border:1px solid #ccc;padding:7px;font-weight:800">Grand Total</td>
                 <td style="border:1px solid #ccc;padding:7px;text-align:right;font-weight:800">${fmt(grand_total)}</td>
                 <td style="border:1px solid #ccc;padding:7px"></td>
               </tr></tfoot>
             </table>
           </div>`);
       }, 300);
-    } catch { alert('Failed to load purchase report for printing'); }
+    } catch { alert('Failed to load purchase report'); }
   };
 
-  // ── Sales Tax print ──────────────────────────────────────────────────────
   const handleSalesTaxPrint = async (from, to) => {
     try {
       const { data } = await getSalesTaxReport({ date_from: from, date_to: to });
       setShowSalesTaxPrint(false);
       setTimeout(() => {
-        const rows = data.bills.map((b, i) => `
+        const rows = (data.items || []).map((b, i) => `
           <tr style="background:${i%2===0?'#fff':'#fafafa'}">
-            <td style="border:1px solid #ccc;padding:6px;font-weight:600">${b.bill_number}</td>
+            <td style="border:1px solid #ccc;padding:6px">${b.bill_number}</td>
             <td style="border:1px solid #ccc;padding:6px">${new Date(b.date).toLocaleDateString()}</td>
-            <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(b.total_amount)}</td>
+            <td style="border:1px solid #ccc;padding:6px">${b.product_name}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right">${b.quantity}</td>
             <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(b.taxable_amount)}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:center">${b.tax_rate}% (CGST ${b.cgst_rate}% / SGST ${b.sgst_rate}%)</td>
             <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(b.cgst)}</td>
             <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(b.sgst)}</td>
             <td style="border:1px solid #ccc;padding:6px;text-align:right;font-weight:600">${fmt(b.total_tax)}</td>
           </tr>`).join('');
         doPrint(`
-          <div style="font-family:Arial,sans-serif;font-size:13px;color:#000;background:#fff;padding:32px">
+          <div style="font-family:Arial,sans-serif;font-size:12px;color:#000;background:#fff;padding:32px">
             <div style="text-align:center;margin-bottom:24px">
               <div style="font-size:22px;font-weight:800">BAKESALE</div>
               <div style="font-size:15px;font-weight:600">Sales Tax Report</div>
               <div style="font-size:12px;color:#555">${from} to ${to}</div>
-              <div style="font-size:11px;color:#888">Printed: ${new Date().toLocaleString()}</div>
             </div>
-            <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <table style="width:100%;border-collapse:collapse;font-size:11px">
               <thead><tr style="background:#f0f0f0">
-                <th style="border:1px solid #ccc;padding:7px">Bill No</th>
-                <th style="border:1px solid #ccc;padding:7px">Date</th>
-                <th style="border:1px solid #ccc;padding:7px;text-align:right">Bill Amount</th>
-                <th style="border:1px solid #ccc;padding:7px;text-align:right">Taxable Amount</th>
-                <th style="border:1px solid #ccc;padding:7px;text-align:right">CGST</th>
-                <th style="border:1px solid #ccc;padding:7px;text-align:right">SGST</th>
-                <th style="border:1px solid #ccc;padding:7px;text-align:right">Total Tax</th>
+                <th style="border:1px solid #ccc;padding:6px">Bill No</th>
+                <th style="border:1px solid #ccc;padding:6px">Date</th>
+                <th style="border:1px solid #ccc;padding:6px">Product</th>
+                <th style="border:1px solid #ccc;padding:6px;text-align:right">Qty</th>
+                <th style="border:1px solid #ccc;padding:6px;text-align:right">Taxable Amt</th>
+                <th style="border:1px solid #ccc;padding:6px;text-align:center">Tax Rate</th>
+                <th style="border:1px solid #ccc;padding:6px;text-align:right">CGST</th>
+                <th style="border:1px solid #ccc;padding:6px;text-align:right">SGST</th>
+                <th style="border:1px solid #ccc;padding:6px;text-align:right">Total Tax</th>
               </tr></thead>
               <tbody>${rows}</tbody>
               <tfoot><tr style="background:#f0f0f0;font-weight:800">
-                <td colspan="2" style="border:1px solid #ccc;padding:7px">TOTAL (${data.bills.length} bills)</td>
-                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_bill_total)}</td>
-                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_taxable)}</td>
-                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_cgst)}</td>
-                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_sgst)}</td>
-                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_tax)}</td>
+                <td colspan="4" style="border:1px solid #ccc;padding:6px">TOTAL</td>
+                <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(data.grand_taxable)}</td>
+                <td style="border:1px solid #ccc;padding:6px"></td>
+                <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(data.grand_cgst)}</td>
+                <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(data.grand_sgst)}</td>
+                <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(data.grand_tax)}</td>
               </tr></tfoot>
             </table>
-            <div style="text-align:center;margin-top:28px;font-size:11px;color:#aaa">— End of Report —</div>
           </div>`);
       }, 300);
     } catch { alert('Failed to load sales tax report'); }
   };
 
-  // ── Purchase Tax print ────────────────────────────────────────────────────
   const handlePurTaxPrint = async (from, to) => {
     try {
       const { data } = await getPurchaseTaxReport({ date_from: from, date_to: to });
       setShowPurTaxPrint(false);
       setTimeout(() => {
-        const rows = data.bills.map((b, i) => `
+        const rows = (data.bills || []).map((b, i) => `
           <tr style="background:${i%2===0?'#fff':'#fafafa'}">
             <td style="border:1px solid #ccc;padding:6px;font-weight:600;font-family:monospace">${b.purchase_number}</td>
             <td style="border:1px solid #ccc;padding:6px">${new Date(b.date).toLocaleDateString()}</td>
@@ -462,7 +473,6 @@ export default function Reports() {
               <div style="font-size:22px;font-weight:800">BAKESALE</div>
               <div style="font-size:15px;font-weight:600">Purchase Tax Report</div>
               <div style="font-size:12px;color:#555">${from} to ${to}</div>
-              <div style="font-size:11px;color:#888">Printed: ${new Date().toLocaleString()}</div>
             </div>
             <table style="width:100%;border-collapse:collapse;font-size:12px">
               <thead><tr style="background:#f0f0f0">
@@ -477,7 +487,7 @@ export default function Reports() {
               </tr></thead>
               <tbody>${rows}</tbody>
               <tfoot><tr style="background:#f0f0f0;font-weight:800">
-                <td colspan="3" style="border:1px solid #ccc;padding:7px">TOTAL (${data.bills.length} purchases)</td>
+                <td colspan="3" style="border:1px solid #ccc;padding:7px">TOTAL</td>
                 <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_taxable)}</td>
                 <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_cgst)}</td>
                 <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_sgst)}</td>
@@ -485,10 +495,191 @@ export default function Reports() {
                 <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_total)}</td>
               </tr></tfoot>
             </table>
-            <div style="text-align:center;margin-top:28px;font-size:11px;color:#aaa">— End of Report —</div>
           </div>`);
       }, 300);
     } catch { alert('Failed to load purchase tax report'); }
+  };
+
+  const handlePurRetPrint = async (from, to) => {
+    try {
+      const { data } = await getPurchaseReturnReport({ date_from: from, date_to: to });
+      setShowPurRetPrint(false);
+      setTimeout(() => {
+        const rows = (data.returns || []).map((r, i) => `
+          <tr style="background:${i%2===0?'#fff':'#fafafa'}">
+            <td style="border:1px solid #ccc;padding:6px;font-weight:600">${r.product_name}</td>
+            <td style="border:1px solid #ccc;padding:6px;font-family:monospace;font-size:11px">${r.product_barcode}</td>
+            <td style="border:1px solid #ccc;padding:6px">${r.vendor_name || '—'}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right">${r.quantity}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(r.purchase_price)}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:center">${r.tax}%</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right;font-weight:600">${fmt(r.item_cost)}</td>
+            <td style="border:1px solid #ccc;padding:6px">${r.reason || '—'}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:center">${r.status === 'returned' ? 'Returned' : 'Pending'}</td>
+            <td style="border:1px solid #ccc;padding:6px">${new Date(r.date).toLocaleDateString()}</td>
+          </tr>`).join('');
+        doPrint(`
+          <div style="font-family:Arial,sans-serif;font-size:12px;color:#000;background:#fff;padding:32px">
+            <div style="text-align:center;margin-bottom:24px">
+              <div style="font-size:22px;font-weight:800">BAKESALE</div>
+              <div style="font-size:14px;font-weight:600">Purchase Return Report</div>
+              <div style="font-size:11px;color:#888">${from} to ${to} · Printed: ${new Date().toLocaleString()}</div>
+            </div>
+            <table style="width:100%;border-collapse:collapse;font-size:11px">
+              <thead><tr style="background:#f0f0f0">
+                <th style="border:1px solid #ccc;padding:6px">Product</th>
+                <th style="border:1px solid #ccc;padding:6px">Barcode</th>
+                <th style="border:1px solid #ccc;padding:6px">Vendor</th>
+                <th style="border:1px solid #ccc;padding:6px;text-align:right">Qty</th>
+                <th style="border:1px solid #ccc;padding:6px;text-align:right">Purchase Price</th>
+                <th style="border:1px solid #ccc;padding:6px;text-align:center">Tax</th>
+                <th style="border:1px solid #ccc;padding:6px;text-align:right">Item Cost</th>
+                <th style="border:1px solid #ccc;padding:6px">Reason</th>
+                <th style="border:1px solid #ccc;padding:6px">Status</th>
+                <th style="border:1px solid #ccc;padding:6px">Date</th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+              <tfoot><tr style="background:#f0f0f0;font-weight:800">
+                <td colspan="6" style="border:1px solid #ccc;padding:6px">TOTAL COST</td>
+                <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(data.total_cost)}</td>
+                <td colspan="3" style="border:1px solid #ccc;padding:6px"></td>
+              </tr></tfoot>
+            </table>
+          </div>`);
+      }, 300);
+    } catch { alert('Failed to load purchase return report'); }
+  };
+
+  const handleItemwisePrint = async (from, to) => {
+    try {
+      const { data } = await getItemWiseReport({ date_from: from, date_to: to });
+      setShowItemwisePrint(false);
+      setTimeout(() => {
+        const items = Array.isArray(data) ? data : [];
+        const grandTotal = items.reduce((s, r) => s + r.total_amount, 0);
+        const rows = items.map((r, i) => `
+          <tr style="background:${i%2===0?'#fff':'#fafafa'}">
+            <td style="border:1px solid #ccc;padding:6px;font-weight:600">${r.product_name}</td>
+            <td style="border:1px solid #ccc;padding:6px;font-family:monospace;font-size:11px">${r.product_barcode}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(r.mrp)}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right">${parseFloat(r.quantity_sold).toFixed(3)}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right;font-weight:600">${fmt(r.total_amount)}</td>
+          </tr>`).join('');
+        doPrint(`
+          <div style="font-family:Arial,sans-serif;font-size:12px;color:#000;background:#fff;padding:32px">
+            <div style="text-align:center;margin-bottom:24px">
+              <div style="font-size:22px;font-weight:800">BAKESALE</div>
+              <div style="font-size:14px;font-weight:600">Item-wise Sale Report</div>
+              <div style="font-size:11px;color:#888">${from} to ${to} · Printed: ${new Date().toLocaleString()}</div>
+            </div>
+            <table style="width:100%;border-collapse:collapse;font-size:12px">
+              <thead><tr style="background:#f0f0f0">
+                <th style="border:1px solid #ccc;padding:7px">Product</th>
+                <th style="border:1px solid #ccc;padding:7px">Barcode</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">MRP</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">Qty Sold</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">Total Amount</th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+              <tfoot><tr style="background:#f0f0f0;font-weight:800">
+                <td colspan="4" style="border:1px solid #ccc;padding:7px">GRAND TOTAL</td>
+                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(grandTotal)}</td>
+              </tr></tfoot>
+            </table>
+          </div>`);
+      }, 300);
+    } catch { alert('Failed to load item-wise report'); }
+  };
+
+  const handleInternalPrint = async (from, to) => {
+    try {
+      const { data } = await getInternalSaleReport({ date_from: from, date_to: to });
+      setShowInternalPrint(false);
+      setTimeout(() => {
+        const items = Array.isArray(data) ? data : [];
+        const grandTotal = items.reduce((s, r) => s + r.total_amount, 0);
+        const rows = items.map((r, i) => `
+          <tr style="background:${i%2===0?'#fff':'#fafafa'}">
+            <td style="border:1px solid #ccc;padding:6px;font-weight:600">${r.destination_name}</td>
+            <td style="border:1px solid #ccc;padding:6px">${r.product_name}</td>
+            <td style="border:1px solid #ccc;padding:6px;font-family:monospace;font-size:11px">${r.product_barcode}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right">${fmt(r.mrp)}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right">${r.quantity}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right;font-weight:600">${fmt(r.total_amount)}</td>
+          </tr>`).join('');
+        doPrint(`
+          <div style="font-family:Arial,sans-serif;font-size:12px;color:#000;background:#fff;padding:32px">
+            <div style="text-align:center;margin-bottom:24px">
+              <div style="font-size:22px;font-weight:800">BAKESALE</div>
+              <div style="font-size:14px;font-weight:600">Internal Sale Report</div>
+              <div style="font-size:11px;color:#888">${from} to ${to} · Printed: ${new Date().toLocaleString()}</div>
+            </div>
+            <table style="width:100%;border-collapse:collapse;font-size:12px">
+              <thead><tr style="background:#f0f0f0">
+                <th style="border:1px solid #ccc;padding:7px">Destination</th>
+                <th style="border:1px solid #ccc;padding:7px">Product</th>
+                <th style="border:1px solid #ccc;padding:7px">Barcode</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">MRP</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">Qty</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">Total</th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+              <tfoot><tr style="background:#f0f0f0;font-weight:800">
+                <td colspan="5" style="border:1px solid #ccc;padding:7px">GRAND TOTAL</td>
+                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(grandTotal)}</td>
+              </tr></tfoot>
+            </table>
+          </div>`);
+      }, 300);
+    } catch { alert('Failed to load internal sale report'); }
+  };
+
+  const handleDirectPrint = async (from, to) => {
+    try {
+      const { data } = await getDirectSaleReport({ date_from: from, date_to: to });
+      setShowDirectPrint(false);
+      setTimeout(() => {
+        const rows = (data.sales || []).map((s, i) => `
+          <tr style="background:${i%2===0?'#fff':'#fafafa'}">
+            <td style="border:1px solid #ccc;padding:6px;font-weight:600">${s.item_name}</td>
+            <td style="border:1px solid #ccc;padding:6px;text-align:right;font-weight:600">${fmt(s.price)}</td>
+            <td style="border:1px solid #ccc;padding:6px">${payLabel[s.payment_type]||s.payment_type}</td>
+            <td style="border:1px solid #ccc;padding:6px">${new Date(s.date).toLocaleDateString()}</td>
+            <td style="border:1px solid #ccc;padding:6px">${s.created_by}</td>
+          </tr>`).join('');
+        doPrint(`
+          <div style="font-family:Arial,sans-serif;font-size:13px;color:#000;background:#fff;padding:32px">
+            <div style="text-align:center;margin-bottom:24px">
+              <div style="font-size:22px;font-weight:800">BAKESALE</div>
+              <div style="font-size:14px;font-weight:600">Direct Sale Report</div>
+              <div style="font-size:11px;color:#888">${from} to ${to} · Printed: ${new Date().toLocaleString()}</div>
+            </div>
+            <div style="border:1px solid #ccc;padding:14px;margin-bottom:20px;background:#f9f9f9">
+              <table style="width:100%;border-collapse:collapse">
+                <tr><td>Cash Total</td><td style="text-align:right;font-weight:600">${fmt(data.cash_total)}</td></tr>
+                <tr><td>Card Total</td><td style="text-align:right;font-weight:600">${fmt(data.card_total)}</td></tr>
+                <tr><td>UPI Total</td><td style="text-align:right;font-weight:600">${fmt(data.upi_total)}</td></tr>
+                <tr style="border-top:2px solid #333"><td style="font-weight:800">Grand Total</td><td style="text-align:right;font-weight:800">${fmt(data.grand_total)}</td></tr>
+              </table>
+            </div>
+            <table style="width:100%;border-collapse:collapse;font-size:12px">
+              <thead><tr style="background:#f0f0f0">
+                <th style="border:1px solid #ccc;padding:7px">Item</th>
+                <th style="border:1px solid #ccc;padding:7px;text-align:right">Amount</th>
+                <th style="border:1px solid #ccc;padding:7px">Payment</th>
+                <th style="border:1px solid #ccc;padding:7px">Date</th>
+                <th style="border:1px solid #ccc;padding:7px">By</th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+              <tfoot><tr style="background:#f0f0f0;font-weight:800">
+                <td style="border:1px solid #ccc;padding:7px">TOTAL</td>
+                <td style="border:1px solid #ccc;padding:7px;text-align:right">${fmt(data.grand_total)}</td>
+                <td colspan="3" style="border:1px solid #ccc;padding:7px"></td>
+              </tr></tfoot>
+            </table>
+          </div>`);
+      }, 300);
+    } catch { alert('Failed to load direct sale report'); }
   };
 
   const intByDest     = intData.reduce((acc, row) => {
@@ -498,17 +689,19 @@ export default function Reports() {
     return acc;
   }, {});
   const intGrandTotal = intData.reduce((s, r) => s + r.total_amount, 0);
-  const intTotalQty   = intData.reduce((s, r) => s + r.quantity,     0);
+  const intTotalQty   = intData.reduce((s, r) => s + r.quantity, 0);
 
-  const TABS = [
-    { k: 'sale',      label: '🧾 Sale Report' },
-    { k: 'itemwise',  label: '📦 Item-wise' },
-    { k: 'internal',  label: '🏭 Internal Sale' },
-    { k: 'purreturn', label: '↩️ Purchase Return' },
-    { k: 'purchase',  label: '📦 Purchase Report' },
-    { k: 'salestax',  label: '🧾 Sales Tax Report' },
-    { k: 'purtax',    label: '📋 Purchase Tax Report' },
+  const ALL_TABS = [
+    { k: 'sale',      label: 'Sale Report',       perm: 'can_view_sale_report' },
+    { k: 'purchase',  label: 'Purchase Report',    perm: 'can_view_purchase_report' },
+    { k: 'purreturn', label: 'Purchase Returns',   perm: 'can_view_purreturn_report' },
+    { k: 'salestax',  label: 'Sales Tax',          perm: 'can_view_salestax_report' },
+    { k: 'purtax',    label: 'Purchase Tax',       perm: 'can_view_purtax_report' },
+    { k: 'itemwise',  label: 'Item-wise Sale',     perm: 'can_view_itemwise_report' },
+    { k: 'internal',  label: 'Internal Sale',      perm: 'can_view_internal_report' },
+    { k: 'direct',    label: 'Direct Sale',        perm: 'can_view_direct_report' },
   ];
+  const TABS = ALL_TABS.filter(t => isAdmin || can(t.perm));
 
   return (
     <div>
@@ -518,14 +711,18 @@ export default function Reports() {
           <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={{ width: 155 }} />
           <input type="date" value={dateTo}   onChange={e => setDateTo(e.target.value)}   style={{ width: 155 }} />
           <button className="btn btn-primary" onClick={() => fetchReport()}>Filter</button>
-          {tab === 'sale'     && <button className="btn btn-secondary" onClick={() => setShowPrintModal(true)} style={{ color: 'var(--accent)', borderColor: 'var(--accent)' }}>🖨️ Print</button>}
-          {tab === 'purchase' && <button className="btn btn-secondary" onClick={() => setShowPurPrint(true)} style={{ color: 'var(--accent)', borderColor: 'var(--accent)' }}>🖨️ Print Report</button>}
-          {tab === 'salestax' && <button className="btn btn-secondary" onClick={() => setShowSalesTaxPrint(true)} style={{ color: 'var(--green)', borderColor: 'var(--green)' }}>🖨️ Print Report</button>}
-          {tab === 'purtax'   && <button className="btn btn-secondary" onClick={() => setShowPurTaxPrint(true)} style={{ color: 'var(--blue)', borderColor: 'var(--blue)' }}>🖨️ Print Report</button>}
+          <button className="btn btn-secondary" onClick={() => fetchReport()}>🔄 Refresh</button>
+          {tab === 'sale' && (isAdmin || can ('can_print_reports'))     && (<button className="btn btn-secondary" onClick={() => setShowPrintModal(true)} style={{ color: 'var(--accent)', borderColor: 'var(--accent)' }}>🖨️ Print</button>)}
+          {tab === 'purchase' && (isAdmin || can ('can_print_reports')) && (<button className="btn btn-secondary" onClick={() => setShowPurPrint(true)} style={{ color: 'var(--accent)', borderColor: 'var(--accent)' }}>🖨️ Print Report</button>)}
+          {tab === 'salestax' && (isAdmin || can ('can_print_reports')) && (<button className="btn btn-secondary" onClick={() => setShowSalesTaxPrint(true)} style={{ color: 'var(--green)', borderColor: 'var(--green)' }}>🖨️ Print Report</button>)}
+          {tab === 'purtax'   && (isAdmin || can ('can_print_reports')) && (<button className="btn btn-secondary" onClick={() => setShowPurTaxPrint(true)} style={{ color: 'var(--blue)', borderColor: 'var(--blue)' }}>🖨️ Print Report</button>)}
+          {tab === 'purreturn' && (isAdmin || can ('can_print_reports')) && (<button className="btn btn-secondary" onClick={() => setShowPurRetPrint(true)} style={{ color: 'var(--red)', borderColor: 'var(--red)' }}>🖨️ Print Report</button>)}
+          {tab === 'itemwise' && (isAdmin || can ('can_print_reports')) && (<button className="btn btn-secondary" onClick={() => setShowItemwisePrint(true)} style={{ color: 'var(--purple)', borderColor: 'var(--purple)' }}>🖨️ Print Report</button>)}
+          {tab === 'internal' && (isAdmin || can ('can_print_reports')) && (<button className="btn btn-secondary" onClick={() => setShowInternalPrint(true)} style={{ color: 'var(--blue)', borderColor: 'var(--blue)' }}>🖨️ Print Report</button>)}
+          {tab === 'direct'   && (isAdmin || can ('can_print_reports')) && (<button className="btn btn-secondary" onClick={() => setShowDirectPrint(true)} style={{ color: 'var(--green)', borderColor: 'var(--green)' }}>🖨️ Print Report</button>)}
         </div>
       </div>
 
-      {/* Tabs */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 24, flexWrap: 'wrap' }}>
         {TABS.map(t => (
           <button key={t.k} onClick={() => setTab(t.k)} className="btn" style={{
@@ -542,28 +739,42 @@ export default function Reports() {
           {/* ── Sale Report ── */}
           {tab === 'sale' && (
             <>
-              {saleData && (
-                <div style={{ marginBottom: 12, fontSize: 13, color: 'var(--text3)' }}>
-                  Showing: <b style={{ color: 'var(--text)' }}>{dateFrom}</b> to <b style={{ color: 'var(--text)' }}>{dateTo}</b>
-                </div>
-              )}
+              {saleData && <div style={{ marginBottom: 12, fontSize: 13, color: 'var(--text3)' }}>
+                Showing: <b style={{ color: 'var(--text)' }}>{dateFrom}</b> to <b style={{ color: 'var(--text)' }}>{dateTo}</b>
+              </div>}
               {saleData ? (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 16 }}>
-                  {[
-                    { label: 'Grand Total', value: fmt(saleData.totals.grand_total), color: 'var(--accent)' },
-                    { label: 'Cash Total',  value: fmt(saleData.totals.cash_total),  color: 'var(--green)' },
-                    { label: 'Card Total',  value: fmt(saleData.totals.card_total),  color: 'var(--blue)' },
-                    { label: 'UPI Total',   value: fmt(saleData.totals.upi_total),   color: 'var(--purple)' },
-                  ].map(s => (
-                    <div key={s.label} className="stat-card">
-                      <div className="label">{s.label}</div>
-                      <div className="value" style={{ color: s.color }}>{s.value}</div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="empty-state"><div className="icon">📊</div><div>Loading today's report…</div></div>
-              )}
+                <>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 16 }}>
+                    {[
+                      { label: 'Grand Total', value: fmt(saleData.totals.grand_total), color: 'var(--accent)' },
+                      { label: 'Cash Total',  value: fmt(saleData.totals.cash_total),  color: 'var(--green)' },
+                      { label: 'Card Total',  value: fmt(saleData.totals.card_total),  color: 'var(--blue)' },
+                      { label: 'UPI Total',   value: fmt(saleData.totals.upi_total),   color: 'var(--purple)' },
+                    ].map(s => (
+                      <div key={s.label} className="stat-card">
+                        <div className="label">{s.label}</div>
+                        <div className="value" style={{ color: s.color }}>{s.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                    <table>
+                      <thead><tr><th>Bill No</th><th>Date & Time</th><th>Payment</th><th>Total</th></tr></thead>
+                      <tbody>
+                        {(saleData.bills || []).map((b, i) => (
+                          <tr key={i}>
+                            <td><span className="badge badge-orange" style={{ fontFamily: 'var(--mono)' }}>{b.bill_number}</span></td>
+                            <td style={{ fontSize: 12, color: 'var(--text3)' }}>{new Date(b.created_at).toLocaleString()}</td>
+                            <td>{payLabel[b.payment_type] || b.payment_type}</td>
+                            <td style={{ fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{fmt(b.total_amount)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {(!saleData.bills || saleData.bills.length === 0) && <div className="empty-state"><div className="icon">🧾</div>No sales in this period</div>}
+                  </div>
+                </>
+              ) : <div className="empty-state"><div className="icon">📊</div><div>Loading today's report…</div></div>}
             </>
           )}
 
@@ -599,7 +810,6 @@ export default function Reports() {
                     {masters.map(m => (
                       <button key={m.id} onClick={() => toggleDest(m.id)} className="btn btn-sm" style={{ background: selDests.includes(m.id) ? 'var(--accent-dim)' : 'var(--bg3)', color: selDests.includes(m.id) ? 'var(--accent)' : 'var(--text2)', border: `1px solid ${selDests.includes(m.id) ? 'var(--accent)' : 'var(--border)'}` }}>{m.name}</button>
                     ))}
-                    <button className="btn btn-primary btn-sm" onClick={() => fetchReport()} style={{ marginLeft: 'auto' }}>Apply Filter</button>
                   </div>
                 </div>
               )}
@@ -652,12 +862,13 @@ export default function Reports() {
               )}
               <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
                 <table>
-                  <thead><tr><th>Product</th><th>Barcode</th><th>Qty</th><th>Purchase Price</th><th>Tax</th><th>Item Cost</th><th>Reason</th><th>Date</th><th>Status</th><th></th></tr></thead>
+                  <thead><tr><th>Product</th><th>Barcode</th><th>Vendor</th><th>Qty</th><th>Purchase Price</th><th>Tax</th><th>Item Cost</th><th>Reason</th><th>Date</th><th>Status</th><th></th></tr></thead>
                   <tbody>
                     {(purRetData?.returns || []).map((r, i) => (
                       <tr key={i}>
                         <td style={{ fontWeight: 600 }}>{r.product_name}</td>
                         <td><span style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{r.product_barcode}</span></td>
+                        <td style={{ color: 'var(--text3)', fontSize: 13 }}>{r.vendor_name || '—'}</td>
                         <td><span className="badge badge-red">{r.quantity}</span></td>
                         <td style={{ fontFamily: 'var(--mono)' }}>{fmt(r.purchase_price)}</td>
                         <td style={{ fontFamily: 'var(--mono)' }}>{r.tax}%</td>
@@ -677,9 +888,7 @@ export default function Reports() {
                     ))}
                   </tbody>
                 </table>
-                {(!purRetData || purRetData.returns.length === 0) && (
-                  <div className="empty-state"><div className="icon">↩️</div>No purchase returns in this period</div>
-                )}
+                {(!purRetData || purRetData.returns.length === 0) && <div className="empty-state"><div className="icon">↩️</div>No purchase returns in this period</div>}
               </div>
             </>
           )}
@@ -687,18 +896,13 @@ export default function Reports() {
           {/* ── Purchase Report ── */}
           {tab === 'purchase' && (
             <>
-              {/* Not Paid card — always visible when data loaded, no Paid card */}
+              {/* Only Not Paid — permanent, no Paid card */}
               {purData && (
                 <div style={{ marginBottom: 20 }}>
-                  <div
-                    className="stat-card"
-                    style={{ maxWidth: 220, cursor: 'pointer', border: '1px solid var(--yellow)' }}
-                    onClick={() => setPurListModal({ bills: (purData.bills || []).filter(b => !b.is_paid), title: '⏳ Not Paid Purchases' })}
-                  >
+                  <div className="stat-card" style={{ maxWidth: 240, cursor: 'pointer', border: '1px solid var(--yellow)' }}
+                    onClick={() => setPurListModal({ bills: (purData.bills || []).filter(b => !b.is_paid), title: '⏳ Not Paid Purchases' })}>
                     <div className="label">⏳ Not Paid</div>
-                    <div className="value" style={{ color: 'var(--yellow)' }}>
-                      {(purData.bills || []).filter(b => !b.is_paid).length}
-                    </div>
+                    <div className="value" style={{ color: 'var(--yellow)' }}>{(purData.bills || []).filter(b => !b.is_paid).length}</div>
                     <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Click to view bills</div>
                   </div>
                 </div>
@@ -706,71 +910,113 @@ export default function Reports() {
               <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
                 <table>
                   <thead>
-                    <tr><th>PO Number</th><th>Vendor</th><th>Date</th><th>Items</th><th>Purchase Value</th><th>Tax %</th><th>Tax (₹)</th><th>Total Value</th><th>Payment</th><th style={{ textAlign: 'right' }}>Actions</th></tr>
+                    <tr>
+                      <th>PO Number</th><th>Vendor</th><th>Date</th><th>Items</th>
+                      <th>Purchase Value</th><th>Tax %</th><th>Tax (₹)</th><th>Total Value</th>
+                      <th>Payment</th><th style={{ textAlign: 'right' }}>Actions</th>
+                    </tr>
                   </thead>
                   <tbody>
-                    {(purData?.bills || []).map((b, i) => (
-                      <tr key={i} style={{ cursor: 'pointer' }} onClick={() => setDetailBillId(b.id)}>
-                        <td><span className="badge badge-orange" style={{ fontFamily: 'var(--mono)' }}>{b.purchase_number}</span></td>
-                        <td style={{ fontWeight: 600 }}>{b.vendor_name}</td>
-                        <td style={{ fontSize: 12, color: 'var(--text3)' }}>{new Date(b.date).toLocaleDateString()}</td>
-                        <td><span className="badge badge-blue">{b.item_count}</span></td>
-                        <td style={{ fontFamily: 'var(--mono)' }}>{fmt(b.total_purchase_price)}</td>
-                        <td style={{ fontFamily: 'var(--mono)', color: 'var(--text3)' }}>
-                          {b.total_purchase_price > 0
-                            ? `${((b.total_tax / b.total_purchase_price) * 100).toFixed(1)}%`
-                            : '—'}
-                        </td>
-                        <td style={{ fontFamily: 'var(--mono)', color: 'var(--text3)' }}>{fmt(b.total_tax)}</td>
-                        <td style={{ fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{fmt(b.total_value)}</td>
-                        <td><span className={`badge ${b.is_paid ? 'badge-green' : 'badge-yellow'}`}>{b.is_paid ? '✅ Paid' : '⏳ Not Paid'}</span></td>
-                        <td onClick={e => e.stopPropagation()}>
-                          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                            <button className="btn btn-secondary btn-sm" onClick={() => setDetailBillId(b.id)}>🔍 View</button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                    {(purData?.bills || []).map((b, i) => {
+                      const taxPct = b.total_purchase_price > 0
+                        ? ((b.total_tax / b.total_purchase_price) * 100).toFixed(1) + '%'
+                        : '—';
+                      return (
+                        <tr key={i} style={{ cursor: 'pointer' }} onClick={() => setDetailBillId(b.id)}>
+                          <td><span className="badge badge-orange" style={{ fontFamily: 'var(--mono)' }}>{b.purchase_number}</span></td>
+                          <td style={{ fontWeight: 600 }}>{b.vendor_name}</td>
+                          <td style={{ fontSize: 12, color: 'var(--text3)' }}>{new Date(b.date).toLocaleDateString()}</td>
+                          <td><span className="badge badge-blue">{b.item_count}</span></td>
+                          <td style={{ fontFamily: 'var(--mono)' }}>{fmt(b.total_purchase_price)}</td>
+                          <td style={{ fontFamily: 'var(--mono)', color: 'var(--text3)' }}>{taxPct}</td>
+                          <td style={{ fontFamily: 'var(--mono)', color: 'var(--text3)' }}>{fmt(b.total_tax)}</td>
+                          <td style={{ fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>{fmt(b.total_value)}</td>
+                          <td><span className={`badge ${b.is_paid ? 'badge-green' : 'badge-yellow'}`}>{b.is_paid ? '✅ Paid' : '⏳ Not Paid'}</span></td>
+                          <td onClick={e => e.stopPropagation()}>
+                            <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                              <button className="btn btn-secondary btn-sm" onClick={() => setDetailBillId(b.id)}>🔍 View</button>
+                              {!b.is_paid && (
+                                <button className="btn btn-sm"
+                                  onClick={() => handleMarkPaid(b.id)}
+                                  disabled={markingPaidId === b.id}
+                                  style={{ color: 'var(--green)', borderColor: 'var(--green)', background: 'var(--green-dim)', fontSize: 12 }}>
+                                  {markingPaidId === b.id ? '…' : '✅ Mark Paid'}
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
-                {(!purData || purData.bills.length === 0) && (
-                  <div className="empty-state"><div className="icon">📦</div>No purchases. Use Filter to search by date.</div>
-                )}
+                {(!purData || purData.bills.length === 0) && <div className="empty-state"><div className="icon">📦</div>No purchases. Use Filter to search by date.</div>}
               </div>
             </>
           )}
 
-          {/* ── Sales Tax Report ── */}
+          {/* ── Sales Tax Report — ITEM BASED ── */}
           {tab === 'salestax' && (
             <>
-              {salesTaxData && salesTaxData.bills.length > 0 && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 20 }}>
-                  <div className="stat-card"><div className="label">Bill Total</div><div className="value" style={{ color: 'var(--accent)' }}>{fmt(salesTaxData.grand_bill_total)}</div></div>
-                  <div className="stat-card"><div className="label">Taxable Amount</div><div className="value" style={{ color: 'var(--blue)' }}>{fmt(salesTaxData.grand_taxable)}</div></div>
-                  <div className="stat-card"><div className="label">Total CGST</div><div className="value" style={{ color: 'var(--green)' }}>{fmt(salesTaxData.grand_cgst)}</div></div>
-                  <div className="stat-card"><div className="label">Total SGST</div><div className="value" style={{ color: 'var(--yellow)' }}>{fmt(salesTaxData.grand_sgst)}</div></div>
+              {/* Tax Rate Filter */}
+              {salesTaxData && salesTaxData.available_tax_rates && salesTaxData.available_tax_rates.length > 0 && (
+                <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 16px', marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3)', marginBottom: 8 }}>Filter by Tax Rate</div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button className="btn btn-sm" onClick={() => { setTaxRateFilter(''); fetchReport('salestax'); }}
+                      style={{ background: !taxRateFilter ? 'var(--accent)' : 'var(--bg3)', color: !taxRateFilter ? '#fff' : 'var(--text2)', border: `1px solid ${!taxRateFilter ? 'var(--accent)' : 'var(--border)'}` }}>
+                      All Rates
+                    </button>
+                    {salesTaxData.available_tax_rates.map(rate => (
+                      <button key={rate} className="btn btn-sm"
+                        onClick={() => { setTaxRateFilter(String(rate)); setTimeout(() => fetchReport('salestax'), 50); }}
+                        style={{ background: taxRateFilter === String(rate) ? 'var(--accent)' : 'var(--bg3)', color: taxRateFilter === String(rate) ? '#fff' : 'var(--text2)', border: `1px solid ${taxRateFilter === String(rate) ? 'var(--accent)' : 'var(--border)'}` }}>
+                        {rate}% (CGST {rate/2}% / SGST {rate/2}%)
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
+
+              {salesTaxData && salesTaxData.items && salesTaxData.items.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 20 }}>
+                  <div className="stat-card"><div className="label">Taxable Amount</div><div className="value" style={{ color: 'var(--accent)' }}>{fmt(salesTaxData.grand_taxable)}</div></div>
+                  <div className="stat-card"><div className="label">Total CGST</div><div className="value" style={{ color: 'var(--green)' }}>{fmt(salesTaxData.grand_cgst)}</div></div>
+                  <div className="stat-card"><div className="label">Total SGST</div><div className="value" style={{ color: 'var(--yellow)' }}>{fmt(salesTaxData.grand_sgst)}</div></div>
+                  <div className="stat-card"><div className="label">Total Tax</div><div className="value" style={{ color: 'var(--blue)' }}>{fmt(salesTaxData.grand_tax)}</div></div>
+                </div>
+              )}
+
               <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
                 <table>
                   <thead>
-                    <tr><th>Bill No</th><th>Date</th><th>Bill Amount</th><th>Taxable Amount</th><th>CGST</th><th>SGST</th><th>Total Tax</th></tr>
+                    <tr>
+                      <th>Bill No</th><th>Date</th><th>Product</th><th>Qty</th>
+                      <th>Taxable Amount</th><th>Tax Rate</th>
+                      <th>CGST Rate</th><th>CGST (₹)</th>
+                      <th>SGST Rate</th><th>SGST (₹)</th>
+                      <th>Total Tax</th>
+                    </tr>
                   </thead>
                   <tbody>
-                    {(salesTaxData?.bills || []).map((b, i) => (
+                    {(salesTaxData?.items || []).map((b, i) => (
                       <tr key={i}>
-                        <td style={{ fontWeight: 600, fontFamily: 'var(--mono)' }}>{b.bill_number}</td>
+                        <td style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{b.bill_number}</td>
                         <td style={{ fontSize: 12, color: 'var(--text3)' }}>{new Date(b.date).toLocaleDateString()}</td>
-                        <td style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{fmt(b.total_amount)}</td>
+                        <td style={{ fontWeight: 600 }}>{b.product_name}</td>
+                        <td style={{ fontFamily: 'var(--mono)', textAlign: 'right' }}>{b.quantity}</td>
                         <td style={{ fontFamily: 'var(--mono)' }}>{fmt(b.taxable_amount)}</td>
+                        <td style={{ fontFamily: 'var(--mono)', color: 'var(--text3)', textAlign: 'center' }}>{b.tax_rate}%</td>
+                        <td style={{ fontFamily: 'var(--mono)', color: 'var(--text3)', textAlign: 'center' }}>{b.cgst_rate}%</td>
                         <td style={{ fontFamily: 'var(--mono)', color: 'var(--green)' }}>{fmt(b.cgst)}</td>
+                        <td style={{ fontFamily: 'var(--mono)', color: 'var(--text3)', textAlign: 'center' }}>{b.sgst_rate}%</td>
                         <td style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{fmt(b.sgst)}</td>
                         <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--accent)' }}>{fmt(b.total_tax)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                {(!salesTaxData || salesTaxData.bills.length === 0) && (
+                {(!salesTaxData || !salesTaxData.items || salesTaxData.items.length === 0) && (
                   <div className="empty-state"><div className="icon">🧾</div>No sales tax data. Use Filter to search by date.</div>
                 )}
               </div>
@@ -780,7 +1026,7 @@ export default function Reports() {
           {/* ── Purchase Tax Report ── */}
           {tab === 'purtax' && (
             <>
-              {purTaxData && purTaxData.bills.length > 0 && (
+              {purTaxData && purTaxData.bills && purTaxData.bills.length > 0 && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 20 }}>
                   <div className="stat-card"><div className="label">Taxable Amount</div><div className="value" style={{ color: 'var(--accent)' }}>{fmt(purTaxData.grand_taxable)}</div></div>
                   <div className="stat-card"><div className="label">Total CGST</div><div className="value" style={{ color: 'var(--green)' }}>{fmt(purTaxData.grand_cgst)}</div></div>
@@ -791,14 +1037,19 @@ export default function Reports() {
               <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
                 <table>
                   <thead>
-                    <tr><th>PO Number</th><th>Vendor</th><th>Date</th><th>Taxable Amount</th><th>CGST</th><th>SGST</th><th>Total Tax</th><th>Total Amount</th></tr>
+                    <tr>
+                      <th>PO Number</th><th>Date</th><th>Vendor</th>
+                      <th>Taxable Amount</th>
+                      <th>CGST (₹)</th><th>SGST (₹)</th>
+                      <th>Total Tax</th><th>Total Amount</th>
+                    </tr>
                   </thead>
                   <tbody>
                     {(purTaxData?.bills || []).map((b, i) => (
                       <tr key={i}>
                         <td><span className="badge badge-orange" style={{ fontFamily: 'var(--mono)' }}>{b.purchase_number}</span></td>
-                        <td style={{ fontWeight: 600 }}>{b.vendor_name}</td>
                         <td style={{ fontSize: 12, color: 'var(--text3)' }}>{new Date(b.date).toLocaleDateString()}</td>
+                        <td style={{ fontWeight: 600 }}>{b.vendor_name}</td>
                         <td style={{ fontFamily: 'var(--mono)' }}>{fmt(b.taxable_amount)}</td>
                         <td style={{ fontFamily: 'var(--mono)', color: 'var(--green)' }}>{fmt(b.cgst)}</td>
                         <td style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{fmt(b.sgst)}</td>
@@ -808,8 +1059,42 @@ export default function Reports() {
                     ))}
                   </tbody>
                 </table>
-                {(!purTaxData || purTaxData.bills.length === 0) && (
-                  <div className="empty-state"><div className="icon">📋</div>No purchase tax data. Use Filter to search by date.</div>
+                {(!purTaxData || purTaxData.bills.length === 0) && <div className="empty-state"><div className="icon">📋</div>No purchase tax data. Use Filter to search by date.</div>}
+              </div>
+            </>
+          )}
+          {/* ── Direct Sale Report ── */}
+          {tab === 'direct' && (
+            <>
+              {directData && directData.sales && directData.sales.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 20 }}>
+                  <div className="stat-card"><div className="label">Grand Total</div><div className="value" style={{ color: 'var(--accent)' }}>{fmt(directData.grand_total)}</div></div>
+                  <div className="stat-card"><div className="label">Cash</div><div className="value" style={{ color: 'var(--green)' }}>{fmt(directData.cash_total)}</div></div>
+                  <div className="stat-card"><div className="label">Card</div><div className="value" style={{ color: 'var(--blue)' }}>{fmt(directData.card_total)}</div></div>
+                  <div className="stat-card"><div className="label">UPI</div><div className="value" style={{ color: 'var(--purple)' }}>{fmt(directData.upi_total)}</div></div>
+                </div>
+              )}
+              <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Item Name</th><th>Amount</th><th>Payment</th><th>Date</th><th>By</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(directData?.sales || []).map((s, i) => (
+                      <tr key={i}>
+                        <td style={{ fontWeight: 600 }}>{s.item_name}</td>
+                        <td style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--accent)' }}>{fmt(s.price)}</td>
+                        <td><span className="badge badge-blue">{payLabel[s.payment_type] || s.payment_type}</span></td>
+                        <td style={{ fontSize: 12, color: 'var(--text3)' }}>{new Date(s.date).toLocaleString()}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text3)' }}>{s.created_by}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {(!directData || !directData.sales || directData.sales.length === 0) && (
+                  <div className="empty-state"><div className="icon">💵</div>No direct sales in this period. Use Filter to search by date.</div>
                 )}
               </div>
             </>
@@ -817,11 +1102,14 @@ export default function Reports() {
         </>
       )}
 
-      {/* Modals */}
-      {showPrintModal    && <PrintModal title="Print Sale Report"         onClose={() => setShowPrintModal(false)}    onPrint={handleSalePrint} />}
-      {showPurPrint      && <PrintModal title="Print Purchase Report"     onClose={() => setShowPurPrint(false)}      onPrint={handlePurchasePrint} />}
-      {showSalesTaxPrint && <PrintModal title="Print Sales Tax Report"    onClose={() => setShowSalesTaxPrint(false)} onPrint={handleSalesTaxPrint} />}
-      {showPurTaxPrint   && <PrintModal title="Print Purchase Tax Report" onClose={() => setShowPurTaxPrint(false)}   onPrint={handlePurTaxPrint} />}
+      {showPrintModal    && <PrintModal title="Print Sale Report"           onClose={() => setShowPrintModal(false)}    onPrint={handleSalePrint} />}
+      {showPurPrint      && <PrintModal title="Print Purchase Report"       onClose={() => setShowPurPrint(false)}      onPrint={handlePurchasePrint} />}
+      {showSalesTaxPrint && <PrintModal title="Print Sales Tax Report"      onClose={() => setShowSalesTaxPrint(false)} onPrint={handleSalesTaxPrint} />}
+      {showPurTaxPrint   && <PrintModal title="Print Purchase Tax Report"   onClose={() => setShowPurTaxPrint(false)}   onPrint={handlePurTaxPrint} />}
+      {showPurRetPrint   && <PrintModal title="Print Purchase Return Report" onClose={() => setShowPurRetPrint(false)}  onPrint={handlePurRetPrint} />}
+      {showItemwisePrint && <PrintModal title="Print Item-wise Sale Report"  onClose={() => setShowItemwisePrint(false)} onPrint={handleItemwisePrint} />}
+      {showInternalPrint && <PrintModal title="Print Internal Sale Report"   onClose={() => setShowInternalPrint(false)} onPrint={handleInternalPrint} />}
+      {showDirectPrint   && <PrintModal title="Print Direct Sale Report"     onClose={() => setShowDirectPrint(false)}  onPrint={handleDirectPrint} />}
       {detailBillId      && <PurchaseBillDetailModal billId={detailBillId} onClose={() => setDetailBillId(null)} />}
       {showPendingRet    && purRetData && <PendingReturnsModal returns={purRetData.returns} onClose={() => setShowPendingRet(false)} />}
       {purListModal      && (
