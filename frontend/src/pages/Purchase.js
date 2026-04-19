@@ -10,6 +10,13 @@ import { usePermissions } from '../context/PermissionContext';
 const UNITS = ['nos', 'kg', 'case'];
 const fmt   = n => `₹${parseFloat(n || 0).toFixed(2)}`;
 
+// ─── Barcode print settings persistence ──────────────────────────────────────
+const BARCODE_SETTINGS_KEY = 'barcode_print_settings';
+const loadBarcodeSettings = () => {
+  try { return JSON.parse(localStorage.getItem(BARCODE_SETTINGS_KEY) || '{}'); }
+  catch { return {}; }
+};
+
 // Remove spinner arrows AND mousewheel from number inputs
 const noArrow = e => {
   if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
@@ -142,65 +149,177 @@ function ProductMasterModal({ onClose }) {
   };
 
   const printBarcode = p => {
-    const win = window.open('', '_blank', 'width=560,height=520');
+    // ── Load persisted settings from parent window's localStorage ──
+    const saved = loadBarcodeSettings();
+    const d = {
+      copies:     saved.copies     ?? 1,
+      topOffset:  saved.topOffset  ?? 0,
+      leftOffset: saved.leftOffset ?? 0,
+      labelWidth: saved.labelWidth ?? 50,
+      bcHeight:   saved.bcHeight   ?? 50,
+    };
+
+    const win = window.open('', '_blank', 'width=620,height=600');
     if (!win) { toast.error('Popup blocked. Please allow popups.'); return; }
+
     win.document.write(`<!DOCTYPE html><html><head>
       <title>Barcode - ${p.name}</title>
       <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
       <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: Arial, sans-serif; background: #f5f5f5; }
-        .controls { background: #fff; border-bottom: 1px solid #ddd; padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+
+        /* ── Controls panel ── */
+        .controls {
+          background: #fff; border-bottom: 1px solid #ddd;
+          padding: 10px 14px; display: flex; flex-direction: column; gap: 8px;
+        }
+        .ctrl-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
         .ctrl-group { display: flex; flex-direction: column; gap: 3px; }
         .ctrl-group label { font-size: 11px; font-weight: 600; color: #666; text-transform: uppercase; }
-        .ctrl-group input { padding: 5px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; width: 80px; }
-        .btn-print { padding: 8px 20px; background: #2563eb; color: #fff; border: none; border-radius: 4px; font-size: 13px; font-weight: 700; cursor: pointer; margin-top: 2px; }
+        .ctrl-group input, .ctrl-group select {
+          padding: 5px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;
+        }
+        .ctrl-group input[type=number] { width: 80px; }
+
+        /* ── Buttons ── */
+        .btn-row { display: flex; gap: 8px; align-items: center; }
+        .btn-print {
+          padding: 8px 20px; background: #2563eb; color: #fff; border: none;
+          border-radius: 4px; font-size: 13px; font-weight: 700; cursor: pointer;
+        }
+        .btn-print:hover { background: #1d4ed8; }
+        .btn-save {
+          padding: 8px 14px; background: #16a34a; color: #fff; border: none;
+          border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer;
+        }
+        .btn-save:hover { background: #15803d; }
+        .saved-badge {
+          font-size: 11px; color: #16a34a; font-weight: 600;
+          display: none; animation: fadeIn 0.2s;
+        }
+        @keyframes fadeIn { from { opacity:0 } to { opacity:1 } }
+
+        /* ── Preview ── */
         .preview { padding: 20px; display: flex; flex-wrap: wrap; gap: 10px; }
-        .label-box { text-align: center; padding: 8px 10px; border: 1px solid #ccc; background: #fff; border-radius: 4px; }
+        .label-box {
+          text-align: center; padding: 8px 10px;
+          border: 1px solid #ccc; background: #fff; border-radius: 4px;
+        }
         .prod-name { font-size: 11px; font-weight: 700; margin-bottom: 3px; word-break: break-word; }
         .price { font-size: 12px; font-weight: 800; margin-top: 3px; }
-        @media print { .controls { display: none !important; } body { background: #fff; } .preview { padding: 0; gap: 0; } }
+
+        /* ── Print mode ── */
+        @media print {
+          .controls { display: none !important; }
+          body { background: #fff; }
+          .preview { padding: 0; gap: 0; }
+        }
       </style>
     </head><body>
       <div class="controls">
-        <div class="ctrl-group"><label>Copies</label><input type="number" id="copies" value="1" min="1" max="50" oninput="renderLabels()" /></div>
-        <div class="ctrl-group"><label>Top (mm)</label><input type="number" id="topOffset" value="0" min="-50" max="100" oninput="renderLabels()" /></div>
-        <div class="ctrl-group"><label>Left (mm)</label><input type="number" id="leftOffset" value="0" min="-50" max="100" oninput="renderLabels()" /></div>
-        <div class="ctrl-group"><label>Width (mm)</label><input type="number" id="labelWidth" value="50" min="20" max="150" oninput="renderLabels()" /></div>
-        <div class="ctrl-group"><label>BC Height</label><input type="number" id="bcHeight" value="50" min="20" max="120" oninput="renderLabels()" /></div>
-        <button class="btn-print" onclick="window.print()">🖨️ Print</button>
+
+        <!-- Adjustment controls row -->
+        <div class="ctrl-row">
+          <div class="ctrl-group">
+            <label>Copies</label>
+            <input type="number" id="copies" value="${d.copies}" min="1" max="50" oninput="renderLabels(); markDirty()" />
+          </div>
+          <div class="ctrl-group">
+            <label>Top (mm)</label>
+            <input type="number" id="topOffset" value="${d.topOffset}" min="-50" max="100" oninput="renderLabels(); markDirty()" />
+          </div>
+          <div class="ctrl-group">
+            <label>Left (mm)</label>
+            <input type="number" id="leftOffset" value="${d.leftOffset}" min="-50" max="100" oninput="renderLabels(); markDirty()" />
+          </div>
+          <div class="ctrl-group">
+            <label>Width (mm)</label>
+            <input type="number" id="labelWidth" value="${d.labelWidth}" min="20" max="150" oninput="renderLabels(); markDirty()" />
+          </div>
+          <div class="ctrl-group">
+            <label>BC Height</label>
+            <input type="number" id="bcHeight" value="${d.bcHeight}" min="20" max="120" oninput="renderLabels(); markDirty()" />
+          </div>
+        </div>
+
+        <!-- Action row -->
+        <div class="btn-row">
+          <button class="btn-print" onclick="saveAndPrint()">🖨️ Save &amp; Print</button>
+          <button class="btn-save"  onclick="saveSettings()">💾 Save Settings</button>
+          <span class="saved-badge" id="savedBadge">✓ Settings saved!</span>
+          <span style="font-size:11px;color:#6c757d;margin-left:4px;" id="dirtyNote"></span>
+        </div>
       </div>
+
       <div class="preview" id="preview"></div>
+
       <script>
+        const STORAGE_KEY = 'barcode_print_settings';
         const barcode = "${p.barcode}";
         const name    = ${JSON.stringify(p.name)};
         const price   = "₹${parseFloat(p.selling_price || 0).toFixed(2)}";
+
+        function getValues() {
+          return {
+            copies:     Math.min(50, parseInt(document.getElementById('copies').value)    || 1),
+            topOffset:  parseInt(document.getElementById('topOffset').value)  || 0,
+            leftOffset: parseInt(document.getElementById('leftOffset').value) || 0,
+            labelWidth: parseInt(document.getElementById('labelWidth').value) || 50,
+            bcHeight:   parseInt(document.getElementById('bcHeight').value)   || 50,
+          };
+        }
+
+        function saveSettings() {
+          const v = getValues();
+          try {
+            const target = window.opener ? window.opener.localStorage : localStorage;
+            target.setItem(STORAGE_KEY, JSON.stringify(v));
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(v));
+          } catch(e) {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(v));
+          }
+          const badge = document.getElementById('savedBadge');
+          badge.style.display = 'inline';
+          document.getElementById('dirtyNote').textContent = '';
+          setTimeout(() => { badge.style.display = 'none'; }, 2500);
+        }
+
+        function markDirty() {
+          document.getElementById('dirtyNote').textContent = '(unsaved changes)';
+        }
+
+        function saveAndPrint() {
+          saveSettings();
+          window.print();
+        }
+
         function renderLabels() {
-          const copies   = Math.min(50, parseInt(document.getElementById('copies').value)    || 1);
-          const top      = parseInt(document.getElementById('topOffset').value)  || 0;
-          const left     = parseInt(document.getElementById('leftOffset').value) || 0;
-          const width    = parseInt(document.getElementById('labelWidth').value) || 50;
-          const bcHeight = parseInt(document.getElementById('bcHeight').value)   || 50;
-          const preview  = document.getElementById('preview');
-          preview.style.marginTop  = top  + 'mm';
-          preview.style.marginLeft = left + 'mm';
+          const { copies, topOffset, leftOffset, labelWidth, bcHeight } = getValues();
+          const preview = document.getElementById('preview');
+          preview.style.marginTop  = topOffset  + 'mm';
+          preview.style.marginLeft = leftOffset + 'mm';
           preview.innerHTML = '';
           for (let i = 0; i < copies; i++) {
             const box = document.createElement('div');
             box.className = 'label-box';
-            box.style.width = width + 'mm';
-            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-            svg.setAttribute('id', 'bc' + i);
-            box.innerHTML = '<div class="prod-name">' + name + '</div>';
-            box.appendChild(svg);
-            box.innerHTML += '<div class="price">' + price + '</div>';
+            box.style.width = labelWidth + 'mm';
+            const nameDiv = document.createElement('div');
+            nameDiv.className = 'prod-name';
+            nameDiv.textContent = name;
+            box.appendChild(nameDiv);
             const svgEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
             svgEl.setAttribute('id', 'bc' + i);
-            box.insertBefore(svgEl, box.lastChild);
+            box.appendChild(svgEl);
+            const priceDiv = document.createElement('div');
+            priceDiv.className = 'price';
+            priceDiv.textContent = price;
+            box.appendChild(priceDiv);
             preview.appendChild(box);
             JsBarcode('#bc' + i, barcode, { format: 'CODE128', width: 1.8, height: bcHeight, displayValue: true, fontSize: 10, margin: 3 });
           }
         }
+
         window.onload = renderLabels;
       <\/script>
     </body></html>`);
@@ -525,7 +644,6 @@ function ProductSearchCell({ value, onSelect }) {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  // Recalculate drop position on scroll/resize
   useEffect(() => {
     if (!open) return;
     const update = () => calcDrop();
@@ -583,7 +701,6 @@ export default function Purchase() {
   const [showProduct,    setShowProduct]    = useState(false);
   const [showVendor,     setShowVendor]     = useState(false);
   const [showPurReturn,  setShowPurReturn]  = useState(false);
-  
 
   const refreshPurchaseNumber = () => {
     getPurchases().then(r => {
@@ -597,8 +714,10 @@ export default function Purchase() {
     }).catch(() => setPurchaseNumber('PO000001'));
   };
 
+  const refreshVendors = () => getVendors().then(r => setVendors(r.data));
+
   useEffect(() => { refreshPurchaseNumber(); }, []);
-  useEffect(() => { getVendors().then(r => setVendors(r.data)); }, []);
+  useEffect(() => { refreshVendors(); }, []);
 
   const updateRow = (id, field, value) =>
     setRows(prev => prev.map(r => {
@@ -620,7 +739,6 @@ export default function Purchase() {
   const addRow    = () => setRows(prev => [...prev, emptyRow()]);
   const removeRow = id => setRows(prev => prev.length > 1 ? prev.filter(r => r._id !== id) : prev);
 
-  // cost_per_item = base_purchase_price ÷ total_qty
   const getCostPerItem = row => {
     const qty      = parseFloat(row.quantity) || 0;
     const totalQty = parseFloat(row.total_qty) || 0;
@@ -630,25 +748,21 @@ export default function Purchase() {
     return totalPurchase / totalQty;
   };
 
-  // Total value calculation:
-  // Excluding: qty × price × (1 + tax/100)
-  // Including: qty × price (tax already inside price)
   const getRowTotalValue = row => {
     const qty   = parseFloat(row.quantity) || 0;
     const price = parseFloat(row.purchase_price) || 0;
     const tax   = parseFloat(row.tax) || 0;
     if (row.tax_type === 'including') {
-      return qty * price; // price already includes tax
+      return qty * price;
     }
     return qty * price * (1 + tax / 100);
   };
 
-  // Base price (excluding tax) — used for cost calculations
   const getBasePrice = row => {
     const price = parseFloat(row.purchase_price) || 0;
     const tax   = parseFloat(row.tax) || 0;
     if (row.tax_type === 'including') {
-      return price / (1 + tax / 100); // extract base from inclusive price
+      return price / (1 + tax / 100);
     }
     return price;
   };
@@ -670,7 +784,6 @@ export default function Purchase() {
           const qty        = parseFloat(r.quantity);
           const totalQty   = parseFloat(r.total_qty);
           const sellingQty = r.purchase_unit === 'case' ? (totalQty / qty) : 1;
-          // If tax is including, store the base price (excl tax) in purchase_price
           const basePrice  = getBasePrice(r);
           return {
             product:        r.product.id,
@@ -695,13 +808,11 @@ export default function Purchase() {
 
   const grandTotal = rows.reduce((s, r) => s + getRowTotalValue(r), 0);
 
-  // Shared style for read-only number inputs (removes spinner arrows via CSS class)
   const numInputStyle = { fontSize: 13, padding: '6px 8px', textAlign: 'right' };
   const numInputProps = { onKeyDown: noArrow, onWheel: noWheel };
 
   return (
     <div>
-      {/* Global CSS to remove spinner arrows */}
       <style>{`
         input[type=number]::-webkit-inner-spin-button,
         input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
@@ -711,7 +822,7 @@ export default function Purchase() {
       <div className="page-header">
         <h1>📦 Purchase</h1>
         <div style={{ display: 'flex', gap: 10 }}>
-          <button className="btn btn-secondary" onClick={refreshPurchaseNumber}>🔄 Refresh</button>
+          <button className="btn btn-secondary" onClick={() => { refreshPurchaseNumber(); refreshVendors(); }}>🔄 Refresh</button>
           {(isAdmin || can('can_access_purchase_return')) && (
             <button className="btn btn-secondary" onClick={() => setShowPurReturn(true)}
               style={{ color: 'var(--red)', borderColor: 'var(--red)' }}>↩️ Purchase Return</button>
@@ -873,7 +984,6 @@ export default function Purchase() {
                       </select>
                     </td>
 
-                    {/* Total Value = qty × purchase_price × (1 + tax%) */}
                     <td style={{ padding: '8px 6px' }}>
                       <div style={{ padding: '6px 10px', background: rowTotal > 0 ? 'var(--accent-dim)' : 'var(--bg2)', borderRadius: 'var(--radius)', fontSize: 13, fontFamily: 'var(--mono)', color: rowTotal > 0 ? 'var(--accent)' : 'var(--text3)', border: `1px solid ${rowTotal > 0 ? 'var(--accent)' : 'var(--border)'}`, textAlign: 'right', minWidth: 110, fontWeight: 700 }}>
                         {rowTotal > 0 ? fmt(rowTotal) : '—'}

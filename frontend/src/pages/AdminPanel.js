@@ -140,7 +140,10 @@ function UserPermissionsModal({ onClose }) {
   const [users,    setUsers]    = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [saving,   setSaving]   = useState(null);
-  const [selected, setSelected] = useState(null); // selected user id
+  const [selected, setSelected] = useState(null);
+
+  // ── Scroll-preservation ref ──────────────────────────────────────────────
+  const permScrollRef = useRef();
 
   const fetchPermissions = async () => {
     setLoading(true);
@@ -157,15 +160,29 @@ function UserPermissionsModal({ onClose }) {
 
   const togglePerm = async (field) => {
     if (!selectedUser) return;
+
+    // Save scroll position before state update
+    const savedScroll = permScrollRef.current?.scrollTop ?? 0;
+
     const newVal = !selectedUser[field];
     const updated = { ...selectedUser, [field]: newVal };
     setUsers(prev => prev.map(u => u.user_id === selected ? updated : u));
+
+    // Restore scroll position after React re-renders
+    requestAnimationFrame(() => {
+      if (permScrollRef.current) permScrollRef.current.scrollTop = savedScroll;
+    });
+
     setSaving(field);
     try {
       await updateUserPermissions(selected, { [field]: newVal });
     } catch {
       toast.error('Failed to save permission');
+      // Restore original on error — scroll is already at the right place
       setUsers(prev => prev.map(u => u.user_id === selected ? selectedUser : u));
+      requestAnimationFrame(() => {
+        if (permScrollRef.current) permScrollRef.current.scrollTop = savedScroll;
+      });
     } finally { setSaving(null); }
   };
 
@@ -228,8 +245,8 @@ function UserPermissionsModal({ onClose }) {
               ))}
             </div>
 
-            {/* Permissions panel */}
-            <div style={{ flex: 1, overflowY: 'auto' }}>
+            {/* Permissions panel — ref here to preserve scroll */}
+            <div ref={permScrollRef} style={{ flex: 1, overflowY: 'auto' }}>
               {!selectedUser ? (
                 <div className="empty-state"><div className="icon">🔑</div>Select a user to manage permissions</div>
               ) : (
@@ -669,6 +686,7 @@ function BackupModal({ onClose }) {
     </div>
   );
 }
+
 export default function AdminPanel() {
   const [showUsers,       setShowUsers]       = useState(false);
   const [showPermissions, setShowPermissions] = useState(false);
